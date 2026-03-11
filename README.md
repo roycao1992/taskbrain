@@ -14,6 +14,38 @@ npm run dev
 # 3. 打开浏览器访问 http://localhost:3000
 ```
 
+## 云端同步（Supabase）
+
+登录后任务、个人档案、主题会同步到云端，多设备共用同一份数据。
+
+### 1. 创建 Supabase 项目
+
+1. 打开 [supabase.com](https://supabase.com) 登录，**New project** 创建项目（记下密码）。
+2. 在 **Settings → API** 中复制 **Project URL** 和 **anon public** key。
+
+### 2. 建表
+
+在 Supabase 控制台 **SQL Editor** 中执行项目里的：
+
+`supabase/migrations/001_user_data.sql`
+
+（或把该文件内容粘贴执行。）
+
+### 3. 配置本机
+
+在项目根目录复制环境变量示例并填入：
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY
+```
+
+### 4. 使用
+
+重启 `npm run dev` 后，打开应用点 ⚙️，在「云端同步」下用邮箱注册/登录即可。数据会自动同步；未登录时仍只存本地。
+
+---
+
 ## 配置 AI 功能
 
 AI 功能使用 DeepSeek API：
@@ -37,6 +69,7 @@ AI 功能使用 DeepSeek API：
 - **📋 本周规划**: AI从待安排中挑选任务到本周
 - **个人档案**: 存储公司/个人/家庭/投资信息，AI诊断时参考
 - **明暗切换**: 浅色/深色主题
+- **云端同步**: 登录后多设备共享数据（Supabase）
 - **数据导出**: JSON备份
 - **自动归档**: 清理完成超过2周的任务
 
@@ -51,6 +84,7 @@ AI 功能使用 DeepSeek API：
 3. 在 **Import Git Repository** 里选择你的 `taskbrain` 仓库，点 **Import**。
 4. 保持默认即可（Framework 会自动识别为 Vite，Build 用 `npm run build`，输出目录为 `dist`）。
 5. 点击 **Deploy**，等构建完成后会得到 `https://xxx.vercel.app` 的访问地址。
+6. 若使用云端同步：在 Vercel 项目 **Settings → Environment Variables** 中添加 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，重新部署一次。
 
 之后每次推送到该仓库的默认分支，Vercel 会自动重新部署。
 
@@ -121,12 +155,11 @@ app.listen(3000);
 - React 18
 - Vite
 - DeepSeek API (deepseek-chat)
-- localStorage 持久化
+- Supabase（认证 + 云端数据）
+- localStorage 本地缓存
 
 ## 后续可以做的
 
-- [ ] 接入Supabase/Firebase实现云端同步
-- [ ] 加登录功能，多设备使用
 - [ ] PWA支持，手机添加到桌面
 - [ ] 拖拽排序
 - [ ] 周回顾功能（每周总结完成了什么）

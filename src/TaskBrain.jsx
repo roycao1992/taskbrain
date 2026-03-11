@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { getSupabase } from "./lib/supabase";
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
 
@@ -190,28 +191,40 @@ var DEF_STATUS = "最近感觉事情太杂，工作生活多线程并行，脑�
 
 var SK = "taskbrain-data";
 
-async function loadData() {
+function loadLocal() {
   try {
-    // Try Claude artifact storage first, fall back to localStorage
-    if (window.storage && window.storage.get) {
-      var r = await window.storage.get(SK);
-      if (r && r.value) return JSON.parse(r.value);
-    } else {
-      var raw = localStorage.getItem(SK);
-      if (raw) return JSON.parse(raw);
-    }
+    if (window.storage && window.storage.get) return null;
+    var raw = localStorage.getItem(SK);
+    if (raw) return JSON.parse(raw);
   } catch (e) { /* ignore */ }
   return null;
 }
 
-async function saveData(d) {
+function saveLocal(d) {
   try {
-    if (window.storage && window.storage.set) {
-      await window.storage.set(SK, JSON.stringify(d));
-    } else {
-      localStorage.setItem(SK, JSON.stringify(d));
-    }
+    if (window.storage && window.storage.set) return;
+    localStorage.setItem(SK, JSON.stringify(d));
   } catch (e) { console.error("Save:", e); }
+}
+
+async function loadFromSupabase(supabase, userId) {
+  if (!supabase || !userId) return null;
+  var r = await supabase.from("user_data").select("tasks, profile, status, dark").eq("id", userId).maybeSingle();
+  if (r.error) return null;
+  if (!r.data) return null;
+  return { tasks: r.data.tasks || [], profile: r.data.profile || {}, status: r.data.status || "", dark: !!r.data.dark };
+}
+
+async function saveToSupabase(supabase, userId, d) {
+  if (!supabase || !userId) return;
+  await supabase.from("user_data").upsert({
+    id: userId,
+    tasks: d.tasks || [],
+    profile: d.profile || {},
+    status: d.status ?? "",
+    dark: !!d.dark,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
 }
 
 /* ═══════════════════════════ AI (DeepSeek) ═══════════════════════════ */
@@ -659,7 +672,15 @@ export default function TaskBrain() {
   var [loaded, setLoaded] = useState(false);
   var [showDone, setShowDone] = useState(false);
   var [showExport, setShowExport] = useState(false);
+  var [user, setUser] = useState(null);
+  var [authReady, setAuthReady] = useState(false);
+  var [authEmail, setAuthEmail] = useState("");
+  var [authPassword, setAuthPassword] = useState("");
+  var [authError, setAuthError] = useState("");
+  var [authLoading, setAuthLoading] = useState(false);
   var inputRef = useRef(null);
+  var saveTimeoutRef = useRef(null);
+  var supabase = getSupabase();
 
   var CW = getCW();
   var T = dark ? DARK : LIGHT;
@@ -669,25 +690,76 @@ export default function TaskBrain() {
   var windowWidth = useWindowWidth();
   var isDesktop = windowWidth >= 1024;
 
-  /* ── Persistence ── */
+  /* ── Auth 状态 ── */
   useEffect(function() {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+    supabase.auth.getSession().then(function(_r) {
+      setUser(_r.data?.session?.user ?? null);
+      setAuthReady(true);
+    });
+    var sub = supabase.auth.onAuthStateChange(function(_e, s) {
+      setUser(s?.user ?? null);
+    });
+    return function() { sub.data.subscription.unsubscribe(); };
+  }, [supabase]);
+
+  /* ── 初始加载：有账号则从 Supabase 拉取，否则从本地 ── */
+  useEffect(function() {
+    if (!authReady) return;
     (async function() {
-      var s = await loadData();
-      if (s) {
-        if (s.tasks) setTasks(s.tasks);
-        if (s.profile) setProfile(s.profile);
-        if (s.status !== undefined) setStatus(s.status);
-        if (s.dark !== undefined) setDark(s.dark);
+      var local = loadLocal();
+      if (supabase && user) {
+        var remote = await loadFromSupabase(supabase, user.id);
+        if (remote && (remote.tasks?.length > 0 || Object.keys(remote.profile || {}).length > 0)) {
+          if (remote.tasks?.length) setTasks(remote.tasks);
+          if (remote.profile && Object.keys(remote.profile).length) setProfile(remote.profile);
+          if (remote.status !== undefined) setStatus(remote.status);
+          if (remote.dark !== undefined) setDark(remote.dark);
+        } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0)) {
+          if (local.tasks?.length) setTasks(local.tasks);
+          if (local.profile) setProfile(local.profile);
+          if (local.status !== undefined) setStatus(local.status);
+          if (local.dark !== undefined) setDark(local.dark);
+          await saveToSupabase(supabase, user.id, local);
+        } else {
+          if (local?.tasks?.length) setTasks(local.tasks);
+          if (local?.profile) setProfile(local.profile);
+          if (local?.status !== undefined) setStatus(local.status);
+          if (local?.dark !== undefined) setDark(local.dark);
+        }
       } else {
-        setTasks(DEMO);
+        if (local) {
+          if (local.tasks?.length) setTasks(local.tasks);
+          if (local.profile) setProfile(local.profile);
+          if (local.status !== undefined) setStatus(local.status);
+          if (local.dark !== undefined) setDark(local.dark);
+        } else {
+          setTasks(DEMO);
+        }
       }
       setLoaded(true);
     })();
-  }, []);
+  }, [authReady, supabase, user?.id]);
 
+  /* ── 保存：始终写本地；已登录则防抖写 Supabase ── */
   useEffect(function() {
-    if (loaded) saveData({ tasks: tasks, profile: profile, status: status, dark: dark });
-  }, [tasks, profile, status, dark, loaded]);
+    if (!loaded) return;
+    var payload = { tasks: tasks, profile: profile, status: status, dark: dark };
+    saveLocal(payload);
+    if (supabase && user) {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(function() {
+        saveToSupabase(supabase, user.id, payload);
+        saveTimeoutRef.current = null;
+      }, 800);
+    }
+    return function() {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [tasks, profile, status, dark, loaded, supabase, user?.id]);
 
   /* ── Task CRUD ── */
   var addTask = async function(text) {
@@ -743,6 +815,52 @@ export default function TaskBrain() {
   function addSub(tid, text) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).concat([{ id: tid + "_" + Date.now(), text: text, done: false }]) }) : t; }); }); }
   function toggleSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).map(function(s) { return s.id === sid ? Object.assign({}, s, { done: !s.done }) : s; }) }) : t; }); }); }
   function removeSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).filter(function(s) { return s.id !== sid; }) }) : t; }); }); }
+
+  async function handleLogin() {
+    if (!supabase) return;
+    setAuthError("");
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError("请填写邮箱和密码");
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      var r = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+      if (r.error) throw r.error;
+      setToast("已登录，数据将同步到云端");
+      setAuthPassword("");
+    } catch (e) {
+      setAuthError(e.message || "登录失败");
+    }
+    setAuthLoading(false);
+  }
+  async function handleSignup() {
+    if (!supabase) return;
+    setAuthError("");
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError("请填写邮箱和密码");
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError("密码至少 6 位");
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      var r = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
+      if (r.error) throw r.error;
+      setToast("注册成功，请查收邮件确认（若需）");
+      setAuthPassword("");
+    } catch (e) {
+      setAuthError(e.message || "注册失败");
+    }
+    setAuthLoading(false);
+  }
+  async function handleLogout() {
+    await supabase?.auth.signOut();
+    setUser(null);
+    setToast("已退出，数据仅存于本机");
+  }
 
   function archiveOld() {
     var cutoff = Date.now() - 14 * 864e5;
@@ -875,6 +993,30 @@ export default function TaskBrain() {
   /* Shared JSX fragments */
   var settingsJSX = showExport ? (
     <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      {/* 云端同步 Supabase */}
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>☁️ 云端同步</div>
+        {!supabase ? (
+          <div style={{ fontSize: 11, color: T.textMuted }}>配置 .env 中的 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY 后可用</div>
+        ) : user ? (
+          <div>
+            <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
+            <button onClick={handleLogout} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+          </div>
+        ) : (
+          <div>
+            <input type="email" value={authEmail} onChange={function(e) { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="邮箱"
+              style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+            <input type="password" value={authPassword} onChange={function(e) { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="密码（至少 6 位）"
+              style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+            {authError && <div style={{ fontSize: 11, color: "#DC2626", marginBottom: 6 }}>{authError}</div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleLogin} disabled={authLoading} style={{ padding: "6px 12px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>登录</button>
+              <button onClick={handleSignup} disabled={authLoading} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>注册</button>
+            </div>
+          </div>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <button onClick={exportJSON} style={{ padding: "8px 16px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>📦 导出JSON备份</button>
         <button onClick={archiveOld} style={{ padding: "8px 16px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>🗑 清理已完成(&gt;2周)</button>
