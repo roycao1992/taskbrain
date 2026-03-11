@@ -3,37 +3,32 @@ import { getSupabase } from "./lib/supabase";
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
 
-const CATEGORIES = [
-  { id: "effects", label: "效果团队", emoji: "📊" },
-  { id: "commerce", label: "商销闭环", emoji: "🛒" },
-  { id: "ai_tech", label: "AI专项技术", emoji: "🤖" },
-  { id: "family", label: "BB家庭", emoji: "👶" },
-  { id: "health", label: "爱好健康", emoji: "🏃" },
-  { id: "invest", label: "投资", emoji: "💰" },
+// 个人分类使用：按索引取色，支持任意数量分类
+var CAT_PALETTE = [
+  { light: { bg: "#FFF7ED", color: "#C2410C", border: "#FDBA74" }, dark: { bg: "#431407", color: "#FDBA74", border: "#92400E" }, dist: "#F97316" },
+  { light: { bg: "#F5F3FF", color: "#6D28D9", border: "#C4B5FD" }, dark: { bg: "#2E1065", color: "#C4B5FD", border: "#5B21B6" }, dist: "#8B5CF6" },
+  { light: { bg: "#ECFEFF", color: "#0E7490", border: "#67E8F9" }, dark: { bg: "#083344", color: "#67E8F9", border: "#155E75" }, dist: "#06B6D4" },
+  { light: { bg: "#FDF2F8", color: "#BE185D", border: "#F9A8D4" }, dark: { bg: "#500724", color: "#F9A8D4", border: "#9D174D" }, dist: "#EC4899" },
+  { light: { bg: "#ECFDF5", color: "#047857", border: "#6EE7B7" }, dark: { bg: "#022C22", color: "#6EE7B7", border: "#065F46" }, dist: "#10B981" },
+  { light: { bg: "#FEFCE8", color: "#A16207", border: "#FDE047" }, dark: { bg: "#422006", color: "#FDE047", border: "#854D0E" }, dist: "#EAB308" },
+  { light: { bg: "#F0FDF4", color: "#15803D", border: "#86EFAC" }, dark: { bg: "#052E16", color: "#86EFAC", border: "#166534" }, dist: "#22C55E" },
+  { light: { bg: "#FEF2F2", color: "#B91C1C", border: "#FECACA" }, dark: { bg: "#450A0A", color: "#FECACA", border: "#991B1B" }, dist: "#EF4444" },
 ];
-
-const CAT_COLORS_LIGHT = {
-  effects: { bg: "#FFF7ED", color: "#C2410C", border: "#FDBA74" },
-  commerce: { bg: "#F5F3FF", color: "#6D28D9", border: "#C4B5FD" },
-  ai_tech: { bg: "#ECFEFF", color: "#0E7490", border: "#67E8F9" },
-  family: { bg: "#FDF2F8", color: "#BE185D", border: "#F9A8D4" },
-  health: { bg: "#ECFDF5", color: "#047857", border: "#6EE7B7" },
-  invest: { bg: "#FEFCE8", color: "#A16207", border: "#FDE047" },
-};
-
-const CAT_COLORS_DARK = {
-  effects: { bg: "#431407", color: "#FDBA74", border: "#92400E" },
-  commerce: { bg: "#2E1065", color: "#C4B5FD", border: "#5B21B6" },
-  ai_tech: { bg: "#083344", color: "#67E8F9", border: "#155E75" },
-  family: { bg: "#500724", color: "#F9A8D4", border: "#9D174D" },
-  health: { bg: "#022C22", color: "#6EE7B7", border: "#065F46" },
-  invest: { bg: "#422006", color: "#FDE047", border: "#854D0E" },
-};
-
-const DIST_COLORS = {
-  effects: "#F97316", commerce: "#8B5CF6", ai_tech: "#06B6D4",
-  family: "#EC4899", health: "#10B981", invest: "#EAB308",
-};
+function getCatColors(categories, catId, dark) {
+  var idx = categories.findIndex(function(c) { return c.id === catId; });
+  if (idx < 0) return dark ? { bg: "#1E2536", color: "#94A3B8", border: "#334155" } : { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB" };
+  var p = CAT_PALETTE[idx % CAT_PALETTE.length];
+  return dark ? p.dark : p.light;
+}
+function getDistColor(categories, catId) {
+  var idx = categories.findIndex(function(c) { return c.id === catId; });
+  if (idx < 0) return "#94A3B8";
+  return CAT_PALETTE[idx % CAT_PALETTE.length].dist;
+}
+function slugForCategory(label) {
+  var s = String(label || "").trim().replace(/\s+/g, "_").replace(/[^\w\u4e00-\u9fa5\-_]/g, "");
+  return s || "cat_" + Date.now();
+}
 
 const PRIORITIES = [
   { id: "urgent", label: "紧急", color: "#DC2626", weight: 4 },
@@ -155,7 +150,7 @@ function dlWeek(ds) {
 
 /* ═══════════════════════════ 默认空数据（未登录/无本地数据时）══════════════════════════ */
 
-var DEF_PROFILE = { company: "", personal: "", invest: "", family: "" };
+var DEF_PROFILE = { company: "", personal: "", invest: "", family: "", categories: [] };
 var DEF_STATUS = "";
 
 /* ═══════════════════════════ STORAGE ═══════════════════════════ */
@@ -235,17 +230,21 @@ async function callAI(sys, msgs) {
 function buildClsSys(prof) {
   var p = prof || {};
   var bg = [p.company, p.personal, p.family, p.invest].filter(Boolean).join("\n");
-  return "你是Roy的任务管理助手。根据用户的一段描述，你需要：\n"
+  var cats = p.categories || [];
+  var catHint = cats.length > 0
+    ? "当前分类（只能选其一）：\n" + cats.map(function(c) { return "id: " + c.id + " 标签: " + (c.emoji || "") + " " + (c.label || c.id); }).join("\n") + "\n若没有合适分类，可返回 newCategory: \"新分类名\" 与可选 newEmoji（如 📌），将自动创建；否则 category 填上述已有 id。"
+    : "用户暂无分类。请返回 newCategory: \"分类名\" 与 newEmoji（如 📌），将自动创建该分类；category 可留空。";
+  return "你是任务管理助手。根据用户的一段描述，你需要：\n"
     + "1) 提炼关键信息 → 生成简洁的任务标题 refinedText（去掉口语、冗余，保留动作+对象）\n"
     + "2) 从描述中识别截止日/时间 → 若有「下周三」「3月20号」「本周五前」等，推算出具体日期，填 deadline（YYYY-MM-DD）；没有则 null\n"
     + "3) 判断是周任务还是截止日任务 → 有明确截止日填 type:deadline，否则 type:week\n"
     + "4) 若是周任务且能推断目标周（如「本周」「下周」）→ 填 week 为该周周一的 YYYY-MM-DD；无法推断或待安排则 week:null\n"
-    + "5) 分类与优先级 → category、priority\n\n"
+    + "5) 分类与优先级 → category 或 newCategory；priority\n\n"
     + (bg ? "【背景】\n" + bg + "\n\n" : "")
-    + "分类id: effects, commerce, ai_tech, family, health, invest\n"
+    + catHint + "\n\n"
     + "优先级id: urgent, high, medium, low\n"
     + "只返回一个JSON，不要markdown包裹：\n"
-    + "{\"refinedText\":\"提炼后的任务标题\",\"category\":\"id\",\"priority\":\"id\",\"type\":\"week或deadline\",\"deadline\":\"YYYY-MM-DD或null\",\"week\":\"YYYY-MM-DD或null\",\"reason\":\"一句话\"}";
+    + "{\"refinedText\":\"提炼后的任务标题\",\"category\":\"已有id或留空\",\"newCategory\":\"新分类名或留空\",\"newEmoji\":\"可选如📌\",\"priority\":\"id\",\"type\":\"week或deadline\",\"deadline\":\"YYYY-MM-DD或null\",\"week\":\"YYYY-MM-DD或null\",\"reason\":\"一句话\"}";
 }
 
 function buildDiagSys(prof, stat) {
@@ -330,29 +329,30 @@ function DistBar(props) {
   var tasks = props.tasks;
   var CW = props.CW;
   var T = props.T;
+  var categories = props.categories || [];
   var thisWeek = tasks.filter(function(t) {
     return !t.done && ((t.type === "week" && t.week === CW) || (t.type === "deadline" && dlWeek(t.deadline) === CW));
   });
-  if (thisWeek.length === 0) return null;
+  if (thisWeek.length === 0 || categories.length === 0) return null;
 
   var counts = {};
-  CATEGORIES.forEach(function(c) {
+  categories.forEach(function(c) {
     counts[c.id] = thisWeek.filter(function(t) { return t.category === c.id; }).length;
   });
-  var missing = CATEGORIES.filter(function(c) { return counts[c.id] === 0; }).map(function(c) { return c.emoji + c.label; });
+  var missing = categories.filter(function(c) { return counts[c.id] === 0; }).map(function(c) { return (c.emoji || "📌") + (c.label || c.id); });
 
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 1, marginBottom: 6 }}>
-        {CATEGORIES.map(function(c) {
+        {categories.map(function(c) {
           if (counts[c.id] <= 0) return null;
-          return <div key={c.id} style={{ flex: counts[c.id], background: DIST_COLORS[c.id], borderRadius: 2 }} title={c.label + ": " + counts[c.id]} />;
+          return <div key={c.id} style={{ flex: counts[c.id], background: getDistColor(categories, c.id), borderRadius: 2 }} title={(c.label || c.id) + ": " + counts[c.id]} />;
         })}
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11, color: T.textSec }}>
-        {CATEGORIES.map(function(c) {
+        {categories.map(function(c) {
           if (counts[c.id] <= 0) return null;
-          return <span key={c.id}>{c.emoji}{counts[c.id]}</span>;
+          return <span key={c.id}>{c.emoji || "📌"}{counts[c.id]}</span>;
         })}
         {missing.length > 0 && (
           <span style={{ color: T.textMuted, fontStyle: "italic" }}>本周空白: {missing.join(" ")}</span>
@@ -438,8 +438,9 @@ function TaskItem(props) {
     else if (dlD <= 3) borderColor = "#FDBA74";
   }
 
-  var catObj = CATEGORIES.find(function(x) { return x.id === task.category; });
-  var catColor = CC[task.category];
+  var catList = props.categories || [];
+  var catObj = catList.find(function(x) { return x.id === task.category; });
+  var catColor = CC[task.category] || getCatColors(catList, task.category, props.dark);
   var priObj = PRIORITIES.find(function(x) { return x.id === task.priority; });
 
   function handleToggleEdit() {
@@ -551,7 +552,8 @@ function TaskItem(props) {
       {isEdit && (
         <div style={{ display: "flex", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid " + T.cardBorder, flexWrap: "wrap", alignItems: "center" }}>
           <SelectBox value={eCat} onChange={setECat} T={T}>
-            {CATEGORIES.map(function(c) { return <option key={c.id} value={c.id}>{c.emoji + " " + c.label}</option>; })}
+            <option value="">未分类</option>
+            {(props.categories || []).map(function(c) { return <option key={c.id} value={c.id}>{(c.emoji || "📌") + " " + (c.label || c.id)}</option>; })}
           </SelectBox>
           <SelectBox value={ePri} onChange={setEPri} T={T}>
             {PRIORITIES.map(function(p) { return <option key={p.id} value={p.id}>{p.label}</option>; })}
@@ -649,6 +651,11 @@ export default function TaskBrain() {
   var [authPassword, setAuthPassword] = useState("");
   var [authError, setAuthError] = useState("");
   var [authLoading, setAuthLoading] = useState(false);
+  var [catNewLabel, setCatNewLabel] = useState("");
+  var [catNewEmoji, setCatNewEmoji] = useState("");
+  var [catEditingId, setCatEditingId] = useState(null);
+  var [catEditLabel, setCatEditLabel] = useState("");
+  var [catEditEmoji, setCatEditEmoji] = useState("");
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
   var userIdRef = useRef(null);
@@ -656,7 +663,12 @@ export default function TaskBrain() {
 
   var CW = getCW();
   var T = dark ? DARK : LIGHT;
-  var CC = dark ? CAT_COLORS_DARK : CAT_COLORS_LIGHT;
+  var categories = profile.categories || [];
+  var CC = useMemo(function() {
+    var o = {};
+    categories.forEach(function(c) { o[c.id] = getCatColors(categories, c.id, dark); });
+    return o;
+  }, [categories, dark]);
   var weekOpts = useMemo(function() { return getWeekOpts(CW); }, [CW]);
   var nw = nextWeekKey(CW);
   var windowWidth = useWindowWidth();
@@ -695,23 +707,28 @@ export default function TaskBrain() {
     (async function() {
       var local = loadLocal();
       var uid = user?.id ?? null;
+      function setProfileWithCategories(p) {
+        if (!p || typeof p !== "object") p = {};
+        if (!Array.isArray(p.categories)) p = Object.assign({}, p, { categories: [] });
+        setProfile(p);
+      }
       if (supabase && uid) {
         var remote = await loadFromSupabase(supabase, uid);
         if (cancelled) return;
         if (remote && (remote.tasks?.length > 0 || Object.keys(remote.profile || {}).length > 0)) {
           if (remote.tasks?.length) setTasks(remote.tasks);
-          if (remote.profile && Object.keys(remote.profile).length) setProfile(remote.profile);
+          setProfileWithCategories(remote.profile);
           if (remote.status !== undefined) setStatus(remote.status);
           if (remote.dark !== undefined) setDark(remote.dark);
         } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0)) {
           if (local.tasks?.length) setTasks(local.tasks);
-          if (local.profile) setProfile(local.profile);
+          setProfileWithCategories(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
-          await saveToSupabase(supabase, uid, local);
+          await saveToSupabase(supabase, uid, { tasks: local.tasks, profile: Object.assign({}, local.profile, { categories: local.profile?.categories || [] }), status: local.status, dark: local.dark });
         } else {
           if (local?.tasks?.length) setTasks(local.tasks);
-          if (local?.profile) setProfile(local.profile);
+          setProfileWithCategories(local?.profile);
           if (local?.status !== undefined) setStatus(local.status);
           if (local?.dark !== undefined) setDark(local.dark);
         }
@@ -719,11 +736,12 @@ export default function TaskBrain() {
         if (cancelled) return;
         if (local) {
           if (local.tasks?.length) setTasks(local.tasks);
-          if (local.profile) setProfile(local.profile);
+          setProfileWithCategories(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
         } else {
           setTasks([]);
+          setProfileWithCategories(DEF_PROFILE);
         }
       }
       if (!cancelled) setLoaded(true);
@@ -755,8 +773,9 @@ export default function TaskBrain() {
     var today = new Date().toISOString().split("T")[0];
     var cwMon = getWeekRange(CW).mon;
     var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
+    var defaultCat = categories.length > 0 ? categories[0].id : "";
 
-    var newTask = { id: id, text: text, category: "effects", priority: "medium", type: hasDL ? "deadline" : "week", week: null, deadline: hasDL ? addDL : null, done: false, subtasks: [] };
+    var newTask = { id: id, text: text, category: defaultCat, priority: "medium", type: hasDL ? "deadline" : "week", week: null, deadline: hasDL ? addDL : null, done: false, subtasks: [] };
     setTasks(function(p) { return [newTask].concat(p); });
     setInput(""); setAddDL(""); setClassifying(true);
 
@@ -773,14 +792,29 @@ export default function TaskBrain() {
         if (typ === "deadline") wk = null;
         if (typ === "week" && !wk) wk = null;
 
-        var cat = CATEGORIES.find(function(c) { return c.id === parsed.category; });
+        var resolvedCatId = defaultCat;
+        if (parsed.newCategory && String(parsed.newCategory).trim()) {
+          var newLabel = String(parsed.newCategory).trim();
+          var newId = slugForCategory(newLabel);
+          var existing = (profile.categories || []).find(function(c) { return c.id === newId || c.label === newLabel; });
+          if (!existing) {
+            var newCat = { id: newId, label: newLabel, emoji: parsed.newEmoji && String(parsed.newEmoji).trim() ? String(parsed.newEmoji).trim().slice(0, 2) : "📌" };
+            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([newCat]) }); });
+            resolvedCatId = newId;
+          } else {
+            resolvedCatId = existing.id;
+          }
+        } else if (parsed.category && (profile.categories || []).some(function(c) { return c.id === parsed.category; })) {
+          resolvedCatId = parsed.category;
+        }
+        var cat = (profile.categories || []).find(function(c) { return c.id === resolvedCatId; }) || (resolvedCatId ? { id: resolvedCatId, label: resolvedCatId, emoji: "📌" } : null);
         var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
         setTasks(function(prev) {
           return prev.map(function(t) {
             if (t.id !== id) return t;
             return Object.assign({}, t, {
               text: refined,
-              category: (cat && cat.id) || t.category,
+              category: resolvedCatId,
               priority: (pri && pri.id) || t.priority,
               type: typ,
               deadline: typ === "deadline" ? dl : null,
@@ -788,7 +822,7 @@ export default function TaskBrain() {
             });
           });
         });
-        var msg = (refined !== text ? "已提炼为：「" + refined + "」 · " : "") + (cat ? cat.emoji + " " + cat.label : "") + (pri ? " · " + pri.label : "") + (parsed.reason ? " — " + parsed.reason : "");
+        var msg = (refined !== text ? "已提炼为：「" + refined + "」 · " : "") + (cat ? (cat.emoji || "📌") + " " + (cat.label || resolvedCatId) : "") + (pri ? " · " + pri.label : "") + (parsed.reason ? " — " + parsed.reason : "");
         setToast(msg);
       } catch (e) { /* parse error */ }
     }
@@ -871,7 +905,7 @@ export default function TaskBrain() {
   function buildSummary() {
     var today = new Date().toISOString().split("T")[0];
     var lines = tasks.filter(function(t) { return !t.done; }).map(function(t) {
-      var c = CATEGORIES.find(function(x) { return x.id === t.category; });
+      var c = categories.find(function(x) { return x.id === t.category; });
       var p = PRIORITIES.find(function(x) { return x.id === t.priority; });
       var time = t.type === "deadline" ? "截止:" + fmtDateWithWeekday(t.deadline) + "(还剩" + daysUntil(t.deadline) + "天)" : (t.week === CW ? "本周" : t.week ? getWeekLabel(t.week, CW) : "待安排");
       var subs = (t.subtasks || []).length > 0 ? " [子任务:" + t.subtasks.filter(function(s) { return s.done; }).length + "/" + t.subtasks.length + "]" : "";
@@ -917,7 +951,7 @@ export default function TaskBrain() {
     if (!pool.length) { setAi({ title: "本周规划", messages: [{ role: "assistant", content: "待安排里没有任务，无需规划。" }], loading: false }); return; }
 
     var msg = "本周周任务(" + wt.length + "):\n" + (wt.map(function(t) { return t.text; }).join("\n") || "无") + "\n\n本周截止日(" + dl.length + "):\n" + (dl.map(function(t) { return t.text + "(截止" + fmtDateWithWeekday(t.deadline) + ")"; }).join("\n") || "无") + "\n\n待安排:\n" + pool.map(function(t) {
-      var c = CATEGORIES.find(function(x) { return x.id === t.category; });
+      var c = categories.find(function(x) { return x.id === t.category; });
       var p = PRIORITIES.find(function(x) { return x.id === t.priority; });
       return "id:" + t.id + " [" + (c ? c.label : "") + "][" + (p ? p.label : "") + "] " + t.text;
     }).join("\n");
@@ -960,7 +994,7 @@ export default function TaskBrain() {
   var allDL = active.filter(function(t) { return t.type === "deadline"; }).sort(function(a, b) { return daysUntil(a.deadline) - daysUntil(b.deadline); });
 
   var taskItemProps = {
-    T: T, CC: CC, CW: CW, nw: nw, weekOpts: weekOpts,
+    T: T, CC: CC, CW: CW, nw: nw, weekOpts: weekOpts, categories: categories, dark: dark,
     onToggle: toggle, onRemove: remove, onUpdate: update,
     onMoveWeek: moveToWeek, onAddSub: addSub, onToggleSub: toggleSub, onRemoveSub: removeSub,
   };
@@ -1006,6 +1040,69 @@ export default function TaskBrain() {
             </div>
           </div>
         )}
+      </div>
+      {/* 分类管理：个人分类，默认新用户为空；可在此添加/编辑，或通过添加任务由 AI 智能创建 */}
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>🏷 分类管理</div>
+        <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>新用户默认无分类。在此添加或编辑分类，或在添加任务时由 AI 智能创建。</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <input type="text" value={catNewEmoji} onChange={function(e) { setCatNewEmoji(e.target.value); }} placeholder="表情" maxLength={4}
+            style={{ width: 48, padding: "6px 8px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+          <input type="text" value={catNewLabel} onChange={function(e) { setCatNewLabel(e.target.value); }} placeholder="分类名称"
+            style={{ flex: 1, minWidth: 80, padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+          <button type="button" onClick={function() {
+            var label = (catNewLabel || "").trim();
+            if (!label) return;
+            var emoji = (catNewEmoji || "").trim() || "📌";
+            var id = slugForCategory(label);
+            if ((profile.categories || []).some(function(c) { return c.id === id; })) return;
+            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([{ id: id, label: label, emoji: emoji }]) }); });
+            setCatNewLabel(""); setCatNewEmoji("");
+          }} style={{ padding: "6px 14px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>添加</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {(profile.categories || []).map(function(c) {
+            if (catEditingId === c.id) {
+              return (
+                <div key={c.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input type="text" value={catEditEmoji} onChange={function(e) { setCatEditEmoji(e.target.value); }} maxLength={4}
+                    style={{ width: 44, padding: "5px 6px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                  <input type="text" value={catEditLabel} onChange={function(e) { setCatEditLabel(e.target.value); }}
+                    style={{ flex: 1, minWidth: 80, padding: "5px 8px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                  <button type="button" onClick={function() {
+                    var label = (catEditLabel || "").trim();
+                    if (!label) return;
+                    var emoji = (catEditEmoji || "").trim() || "📌";
+                    setProfile(function(prev) {
+                      var list = (prev.categories || []).map(function(x) {
+                        if (x.id !== c.id) return x;
+                        return Object.assign({}, x, { label: label, emoji: emoji });
+                      });
+                      return Object.assign({}, prev, { categories: list });
+                    });
+                    setCatEditingId(null);
+                  }} style={{ padding: "5px 10px", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>保存</button>
+                  <button type="button" onClick={function() { setCatEditingId(null); }} style={{ padding: "5px 10px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>取消</button>
+                </div>
+              );
+            }
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: T.secBadge, borderRadius: 6 }}>
+                <span style={{ fontSize: 12, color: T.text }}>{(c.emoji || "📌") + " " + (c.label || c.id)}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" onClick={function() { setCatEditingId(c.id); setCatEditLabel(c.label || c.id); setCatEditEmoji(c.emoji || "📌"); }} style={{ padding: "4px 8px", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
+                  <button type="button" onClick={function() {
+                    var remaining = (profile.categories || []).filter(function(x) { return x.id !== c.id; });
+                    if (remaining.length === 0) return;
+                    var fallbackId = remaining[0] ? remaining[0].id : "";
+                    setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).filter(function(x) { return x.id !== c.id; }) }); });
+                    setTasks(function(prev) { return prev.map(function(t) { return t.category === c.id ? Object.assign({}, t, { category: fallbackId }) : t; }); });
+                  }} style={{ padding: "4px 8px", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: "#DC2626" }}>删除</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <button onClick={exportJSON} style={{ padding: "8px 16px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>📦 导出JSON备份</button>
@@ -1172,14 +1269,16 @@ export default function TaskBrain() {
       {/* ── CATEGORY VIEW ── */}
       {view === "category" && (
         <div>
-          {active.length === 0
+          {categories.length === 0
+            ? <Empty msg="暂无分类，请在设置中添加分类或通过添加任务智能创建" />
+            : active.length === 0
             ? <Empty msg="暂无任务" />
-            : CATEGORIES.map(function(cat) {
+            : categories.map(function(cat) {
                 var list = active.filter(function(t) { return t.category === cat.id; });
                 if (!list.length) return null;
                 var clr = CC[cat.id];
                 return (
-                  <Section T={T} key={cat.id} title={cat.emoji + " " + cat.label} count={list.length} accent={clr ? clr.color : undefined}>
+                  <Section T={T} key={cat.id} title={(cat.emoji || "📌") + " " + (cat.label || cat.id)} count={list.length} accent={clr ? clr.color : undefined}>
                     {sortP(list).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
                   </Section>
                 );
@@ -1295,7 +1394,7 @@ export default function TaskBrain() {
                   );
                 })}
               </div>
-              <DistBar tasks={tasks} CW={CW} T={T} />
+              <DistBar tasks={tasks} CW={CW} T={T} categories={categories} />
             </div>
 
             {/* Divider */}
@@ -1370,7 +1469,7 @@ export default function TaskBrain() {
             })}
           </div>
 
-          <DistBar tasks={tasks} CW={CW} T={T} />
+          <DistBar tasks={tasks} CW={CW} T={T} categories={categories} />
 
           {/* AI Buttons */}
           <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
