@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"const.*=.*{$\\\\|const T\\\\|const.*Theme\\\\|isDark\\\\|lightMode\\\\|darkMode\\\\|THEME\\\\|theme\" /Users/roy/Projects/taskbrain/src/TaskBrain.jsx)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
