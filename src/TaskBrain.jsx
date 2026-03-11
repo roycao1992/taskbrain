@@ -133,10 +133,19 @@ function daysUntil(ds) {
   return Math.ceil((d - n) / 86400000);
 }
 
+var WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+function getWeekday(ds) {
+  if (!ds) return "";
+  return WEEKDAY_ZH[new Date(ds).getDay()];
+}
 function fmtDate(ds) {
   if (!ds) return "";
   var d = new Date(ds);
   return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+}
+function fmtDateWithWeekday(ds) {
+  if (!ds) return "";
+  return fmtDate(ds) + " " + getWeekday(ds);
 }
 
 function dlWeek(ds) {
@@ -511,7 +520,7 @@ function TaskItem(props) {
             {priObj && <span style={{ fontSize: 11, fontWeight: 700, color: priObj.color }}>{priObj.label}</span>}
             {task.type === "deadline" && task.deadline && (
               <span style={{ fontSize: 11, fontWeight: 700, color: dlD < 0 ? "#DC2626" : dlD <= 3 ? "#DC2626" : dlD <= 7 ? "#CA8A04" : T.textSec }}>
-                {"🗓 " + fmtDate(task.deadline) + " · " + (dlD < 0 ? "已过期" + (-dlD) + "天" : dlD === 0 ? "今天截止" : dlD === 1 ? "明天截止" : "还剩" + dlD + "天")}
+                {"🗓 " + fmtDateWithWeekday(task.deadline) + " · " + (dlD < 0 ? "已过期" + (-dlD) + "天" : dlD === 0 ? "今天截止" : dlD === 1 ? "明天截止" : "还剩" + dlD + "天")}
               </span>
             )}
             {task.type === "week" && task.week && (
@@ -607,7 +616,7 @@ function TaskItem(props) {
           })}
           <div style={{ display: "flex", gap: 6, marginLeft: 30, marginTop: 6 }}>
             <input value={localSub} onChange={function(e) { setLocalSub(e.target.value); }}
-              onKeyDown={function(e) { if (e.key === "Enter") handleAddSub(); }}
+              onKeyDown={function(e) { if (e.key === "Enter" && !e.nativeEvent.isComposing) handleAddSub(); }}
               placeholder="添加子任务..."
               style={{ flex: 1, padding: "5px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, outline: "none", fontFamily: FONT }} />
             <button onClick={handleAddSub} style={{ fontSize: 11, fontWeight: 600, color: T.accent, background: "none", border: "none", cursor: "pointer", fontFamily: FONT }}>
@@ -759,7 +768,7 @@ export default function TaskBrain() {
     var lines = tasks.filter(function(t) { return !t.done; }).map(function(t) {
       var c = CATEGORIES.find(function(x) { return x.id === t.category; });
       var p = PRIORITIES.find(function(x) { return x.id === t.priority; });
-      var time = t.type === "deadline" ? "截止:" + fmtDate(t.deadline) + "(还剩" + daysUntil(t.deadline) + "天)" : (t.week === CW ? "本周" : t.week ? getWeekLabel(t.week, CW) : "待安排");
+      var time = t.type === "deadline" ? "截止:" + fmtDateWithWeekday(t.deadline) + "(还剩" + daysUntil(t.deadline) + "天)" : (t.week === CW ? "本周" : t.week ? getWeekLabel(t.week, CW) : "待安排");
       var subs = (t.subtasks || []).length > 0 ? " [子任务:" + t.subtasks.filter(function(s) { return s.done; }).length + "/" + t.subtasks.length + "]" : "";
       return "[" + (t.type === "deadline" ? "截止日" : "周") + "][" + (c ? c.label : "") + "][" + (p ? p.label : "") + "][" + time + "] " + t.text + subs;
     });
@@ -802,7 +811,7 @@ export default function TaskBrain() {
     var pool = tasks.filter(function(t) { return t.type === "week" && !t.week && !t.done; });
     if (!pool.length) { setAi({ title: "本周规划", messages: [{ role: "assistant", content: "待安排里没有任务，无需规划。" }], loading: false }); return; }
 
-    var msg = "本周周任务(" + wt.length + "):\n" + (wt.map(function(t) { return t.text; }).join("\n") || "无") + "\n\n本周截止日(" + dl.length + "):\n" + (dl.map(function(t) { return t.text + "(截止" + fmtDate(t.deadline) + ")"; }).join("\n") || "无") + "\n\n待安排:\n" + pool.map(function(t) {
+    var msg = "本周周任务(" + wt.length + "):\n" + (wt.map(function(t) { return t.text; }).join("\n") || "无") + "\n\n本周截止日(" + dl.length + "):\n" + (dl.map(function(t) { return t.text + "(截止" + fmtDateWithWeekday(t.deadline) + ")"; }).join("\n") || "无") + "\n\n待安排:\n" + pool.map(function(t) {
       var c = CATEGORIES.find(function(x) { return x.id === t.category; });
       var p = PRIORITIES.find(function(x) { return x.id === t.priority; });
       return "id:" + t.id + " [" + (c ? c.label : "") + "][" + (p ? p.label : "") + "] " + t.text;
@@ -934,7 +943,7 @@ export default function TaskBrain() {
       {(ai.title === "AI诊断对话" || ai.title === "本周规划") && !ai.loading && (
         <div style={{ display: "flex", gap: 8, borderTop: "1px solid " + T.cardBorder, paddingTop: 10 }}>
           <input value={aiInput} onChange={function(e) { setAiInput(e.target.value); }}
-            onKeyDown={function(e) { if (e.key === "Enter" && aiInput.trim()) continueChat(aiInput); }}
+            onKeyDown={function(e) { if (e.key === "Enter" && !e.nativeEvent.isComposing && aiInput.trim()) continueChat(aiInput); }}
             placeholder="追问或反驳..."
             style={{ flex: 1, padding: "8px 12px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, outline: "none", fontFamily: FONT }} />
           <button onClick={function() { if (aiInput.trim()) continueChat(aiInput); }}
@@ -954,7 +963,7 @@ export default function TaskBrain() {
     <div style={{ marginBottom: 24 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <input ref={inputRef} value={input} onChange={function(e) { setInput(e.target.value); }}
-          onKeyDown={function(e) { if (e.key === "Enter" && input.trim()) addTask(input.trim()); }}
+          onKeyDown={function(e) { if (e.key === "Enter" && !e.nativeEvent.isComposing && input.trim()) addTask(input.trim()); }}
           placeholder="描述任务即可，如：下周三前和PM对齐试点进展、本周五婴儿床下单..."
           style={{ flex: 1, padding: "12px 16px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 10, fontSize: 14, color: T.text, outline: "none", fontFamily: FONT, boxShadow: T.shadow }} />
         <button onClick={function() { if (input.trim()) addTask(input.trim()); }} disabled={!input.trim() || classifying}
