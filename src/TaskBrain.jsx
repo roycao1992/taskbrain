@@ -153,39 +153,10 @@ function dlWeek(ds) {
   return ds ? getWeekKey(new Date(ds)) : null;
 }
 
-/* ═══════════════════════════ DEMO DATA ═══════════════════════════ */
+/* ═══════════════════════════ 默认空数据（未登录/无本地数据时）══════════════════════════ */
 
-var in5 = new Date(Date.now() + 5 * 864e5).toISOString().split("T")[0];
-var in12 = new Date(Date.now() + 12 * 864e5).toISOString().split("T")[0];
-var in20 = new Date(Date.now() + 20 * 864e5).toISOString().split("T")[0];
-
-var DEMO = [
-  { id: "1", text: "Review效果团队bimonthly数据", category: "effects", priority: "high", type: "week", week: getCW(), deadline: null, done: false, subtasks: [] },
-  { id: "2", text: "和技术负责人对齐试点项目checkpoint", category: "ai_tech", priority: "urgent", type: "week", week: getCW(), deadline: null, done: false, subtasks: [
-    { id: "2a", text: "准备评估维度文档", done: true },
-    { id: "2b", text: "和PM单独聊进展", done: false },
-    { id: "2c", text: "确认技术负责人反馈", done: false },
-  ]},
-  { id: "3", text: "婴儿床下单", category: "family", priority: "high", type: "deadline", week: null, deadline: in5, done: false, subtasks: [
-    { id: "3a", text: "看小红书测评", done: true },
-    { id: "3b", text: "问朋友推荐", done: false },
-    { id: "3c", text: "比价下单", done: false },
-  ]},
-  { id: "4", text: "约同学们确定跑步时间", category: "health", priority: "medium", type: "week", week: null, deadline: null, done: false, subtasks: [] },
-  { id: "5", text: "美股持仓财报日期整理", category: "invest", priority: "medium", type: "week", week: null, deadline: null, done: false, subtasks: [] },
-  { id: "6", text: "CID业务数据周报review", category: "commerce", priority: "high", type: "week", week: getCW(), deadline: null, done: false, subtasks: [] },
-  { id: "7", text: "PM两周checkpoint评估准备", category: "ai_tech", priority: "high", type: "deadline", week: null, deadline: in12, done: false, subtasks: [] },
-  { id: "8", text: "摩托车保养预约", category: "health", priority: "low", type: "week", week: null, deadline: null, done: false, subtasks: [] },
-  { id: "9", text: "Q2效果团队KPI方案提交", category: "effects", priority: "high", type: "deadline", week: null, deadline: in20, done: false, subtasks: [] },
-];
-
-var DEF_PROFILE = {
-  company: "引响合伙人(10%股份)，小红书营销公司，25年营收5.5亿，250人\n管效果投放团队30+人（4个部门）\n管商销/闭环直播15人（CID业务）\n技术产品团队5人，正在做AI改革试点",
-  personal: "92年，UC Berkeley CS，前Uber/小红书\nbb即将出生\n爱好：炒股、摩托车、健身、跑步",
-  invest: "美股为主，具体持仓待补充",
-  family: "bb快出生了，需要准备的东西还比较多",
-};
-var DEF_STATUS = "最近感觉事情太杂，工作生活多线程并行，脑子经常浆糊\nbb快出生了，有点焦虑准备是否充分\nAI专项刚启动，对技术团队改革的节奏拿不太准";
+var DEF_PROFILE = { company: "", personal: "", invest: "", family: "" };
+var DEF_STATUS = "";
 
 /* ═══════════════════════════ STORAGE ═══════════════════════════ */
 
@@ -752,7 +723,7 @@ export default function TaskBrain() {
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
         } else {
-          setTasks(DEMO);
+          setTasks([]);
         }
       }
       if (!cancelled) setLoaded(true);
