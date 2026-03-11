@@ -997,7 +997,9 @@ export default function TaskBrain() {
       <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>☁️ 云端同步</div>
         {!supabase ? (
-          <div style={{ fontSize: 11, color: T.textMuted }}>配置 .env 中的 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY 后可用</div>
+          <div style={{ fontSize: 11, color: T.textMuted }}>
+            未配置 Supabase。本地：在 .env 填写 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY；Vercel：在项目 Settings → Environment Variables 添加后重新部署。
+          </div>
         ) : user ? (
           <div>
             <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
@@ -1005,6 +1007,7 @@ export default function TaskBrain() {
           </div>
         ) : (
           <div>
+            <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>登录后电脑与手机将同步同一份数据，请用同一账号在两端登录。</div>
             <input type="email" value={authEmail} onChange={function(e) { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="邮箱"
               style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
             <input type="password" value={authPassword} onChange={function(e) { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="密码（至少 6 位）"
@@ -1252,6 +1255,21 @@ export default function TaskBrain() {
               })}
             </div>
 
+            {/* 云端同步：始终可见 */}
+            <div style={{ marginBottom: 16, padding: "10px 12px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, fontSize: 12 }}>
+              <div style={{ fontWeight: 600, color: T.textSec, marginBottom: 4 }}>☁️ 云端同步</div>
+              {!supabase ? (
+                <div style={{ fontSize: 11, color: T.textMuted }}>未配置。请在 Vercel 项目 Settings → Environment Variables 添加 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY 后<strong>重新部署</strong>（Redeploy）。</div>
+              ) : user ? (
+                <div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
+                  <button onClick={handleLogout} style={{ padding: "4px 10px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出</button>
+                </div>
+              ) : (
+                <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "8px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 同步到手机/电脑</button>
+              )}
+            </div>
+
             {/* Icon Buttons */}
             <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
               <HeaderBtn onClick={function() { setShowProf(!showProf); }} active={showProf} T={T}>👤</HeaderBtn>
@@ -1314,7 +1332,7 @@ export default function TaskBrain() {
         <div style={{ maxWidth: 640, margin: "0 auto", padding: "40px 20px 80px" }}>
 
           {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <div>
               <h1 style={{ fontSize: 26, fontWeight: 700, color: T.text, margin: 0, letterSpacing: -0.5 }}>TaskBrain</h1>
               <span style={{ fontSize: 12, color: T.textMuted, fontWeight: 500 }}>
@@ -1326,6 +1344,21 @@ export default function TaskBrain() {
               <HeaderBtn onClick={function() { setShowExport(!showExport); }} active={showExport} T={T}>⚙️</HeaderBtn>
               <HeaderBtn onClick={function() { setDark(!dark); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
+          </div>
+
+          {/* 云端同步：手机端始终可见 */}
+          <div style={{ marginBottom: 20, padding: "12px 14px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, fontSize: 13 }}>
+            <div style={{ fontWeight: 600, color: T.textSec, marginBottom: 6 }}>☁️ 云端同步</div>
+            {!supabase ? (
+              <div style={{ fontSize: 12, color: T.textMuted }}>未配置。请在 Vercel 添加环境变量后重新部署。</div>
+            ) : user ? (
+              <div>
+                <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 8 }}>已登录：{user.email}</div>
+                <button onClick={handleLogout} style={{ padding: "6px 14px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+              </div>
+            ) : (
+              <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "12px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 与电脑同步</button>
+            )}
           </div>
 
           {settingsJSX}
