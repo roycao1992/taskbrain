@@ -288,7 +288,7 @@ var SYS_WK = "你是Roy的任务管理助手。从待安排挑任务到本周。
 
 function MiniBtn(props) {
   return (
-    <button onClick={props.onClick} style={{
+    <button type="button" onClick={props.onClick} style={{
       background: "none", border: "none", fontSize: 12, fontWeight: 500,
       color: props.color, cursor: "pointer", padding: "4px 6px", fontFamily: FONT,
     }}>
@@ -299,9 +299,9 @@ function MiniBtn(props) {
 
 function QuickBtn(props) {
   return (
-    <button onClick={props.onClick} style={{
+    <button type="button" onClick={function(e) { e.preventDefault(); e.stopPropagation(); if (props.onClick) props.onClick(); }} style={{
       background: "none", border: "none", fontSize: 11, fontWeight: 600,
-      color: props.color, cursor: "pointer", padding: "2px 0", fontFamily: FONT,
+      color: props.color, cursor: "pointer", padding: "6px 10px", fontFamily: FONT,
       textDecoration: "underline", textUnderlineOffset: 2,
     }}>
       {props.children}
@@ -311,7 +311,7 @@ function QuickBtn(props) {
 
 function HeaderBtn(props) {
   return (
-    <button onClick={props.onClick} style={{
+    <button type="button" onClick={props.onClick} style={{
       padding: "8px 12px", background: props.T.card,
       border: "1px solid " + (props.active ? props.T.accent : props.T.cardBorder),
       borderRadius: 8, fontSize: 13, cursor: "pointer",
@@ -680,6 +680,7 @@ export default function TaskBrain() {
   var [authLoading, setAuthLoading] = useState(false);
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
+  var userIdRef = useRef(null);
   var supabase = getSupabase();
 
   var CW = getCW();
@@ -690,29 +691,42 @@ export default function TaskBrain() {
   var windowWidth = useWindowWidth();
   var isDesktop = windowWidth >= 1024;
 
-  /* ── Auth 状态 ── */
+  /* ── Auth 状态：仅当 user id 变化时 setUser，避免 onAuthStateChange 频繁触发导致重渲染风暴 ── */
   useEffect(function() {
     if (!supabase) {
       setAuthReady(true);
       return;
     }
     supabase.auth.getSession().then(function(_r) {
-      setUser(_r.data?.session?.user ?? null);
+      var u = _r.data?.session?.user ?? null;
+      var id = u?.id ?? null;
+      if (id !== userIdRef.current) {
+        userIdRef.current = id;
+        setUser(u);
+      }
       setAuthReady(true);
     });
     var sub = supabase.auth.onAuthStateChange(function(_e, s) {
-      setUser(s?.user ?? null);
+      var u = s?.user ?? null;
+      var id = u?.id ?? null;
+      if (id !== userIdRef.current) {
+        userIdRef.current = id;
+        setUser(u);
+      }
     });
     return function() { sub.data.subscription.unsubscribe(); };
   }, [supabase]);
 
-  /* ── 初始加载：有账号则从 Supabase 拉取，否则从本地 ── */
+  /* ── 初始加载：有账号则从 Supabase 拉取，否则从本地；用 cancelled 避免竞态时用旧结果覆盖 ── */
   useEffect(function() {
     if (!authReady) return;
+    var cancelled = false;
     (async function() {
       var local = loadLocal();
-      if (supabase && user) {
-        var remote = await loadFromSupabase(supabase, user.id);
+      var uid = user?.id ?? null;
+      if (supabase && uid) {
+        var remote = await loadFromSupabase(supabase, uid);
+        if (cancelled) return;
         if (remote && (remote.tasks?.length > 0 || Object.keys(remote.profile || {}).length > 0)) {
           if (remote.tasks?.length) setTasks(remote.tasks);
           if (remote.profile && Object.keys(remote.profile).length) setProfile(remote.profile);
@@ -723,7 +737,7 @@ export default function TaskBrain() {
           if (local.profile) setProfile(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
-          await saveToSupabase(supabase, user.id, local);
+          await saveToSupabase(supabase, uid, local);
         } else {
           if (local?.tasks?.length) setTasks(local.tasks);
           if (local?.profile) setProfile(local.profile);
@@ -731,6 +745,7 @@ export default function TaskBrain() {
           if (local?.dark !== undefined) setDark(local.dark);
         }
       } else {
+        if (cancelled) return;
         if (local) {
           if (local.tasks?.length) setTasks(local.tasks);
           if (local.profile) setProfile(local.profile);
@@ -740,8 +755,9 @@ export default function TaskBrain() {
           setTasks(DEMO);
         }
       }
-      setLoaded(true);
+      if (!cancelled) setLoaded(true);
     })();
+    return function() { cancelled = true; };
   }, [authReady, supabase, user?.id]);
 
   /* ── 保存：始终写本地；已登录则防抖写 Supabase ── */
@@ -1270,11 +1286,11 @@ export default function TaskBrain() {
               )}
             </div>
 
-            {/* Icon Buttons */}
+            {/* Icon Buttons：仅 ⚙️ 用延迟关闭避免输入框聚焦时卡住 */}
             <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-              <HeaderBtn onClick={function() { setShowProf(!showProf); }} active={showProf} T={T}>👤</HeaderBtn>
-              <HeaderBtn onClick={function() { setShowExport(!showExport); }} active={showExport} T={T}>⚙️</HeaderBtn>
-              <HeaderBtn onClick={function() { setDark(!dark); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
+              <HeaderBtn onClick={function() { setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
+              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowExport(function(p) { return !p; }); }); } else { setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
+              <HeaderBtn onClick={function() { setDark(function(p) { return !p; }); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
 
             {settingsJSX}
@@ -1340,9 +1356,9 @@ export default function TaskBrain() {
               </span>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <HeaderBtn onClick={function() { setShowProf(!showProf); }} active={showProf} T={T}>👤</HeaderBtn>
-              <HeaderBtn onClick={function() { setShowExport(!showExport); }} active={showExport} T={T}>⚙️</HeaderBtn>
-              <HeaderBtn onClick={function() { setDark(!dark); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
+              <HeaderBtn onClick={function() { setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
+              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowExport(function(p) { return !p; }); }); } else { setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
+              <HeaderBtn onClick={function() { setDark(function(p) { return !p; }); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
           </div>
 
