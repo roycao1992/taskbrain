@@ -668,6 +668,7 @@ export default function TaskBrain() {
   var [noteNewContent, setNoteNewContent] = useState("");
   var [noteNewExpanded, setNoteNewExpanded] = useState(false);
   var [noteConvertingId, setNoteConvertingId] = useState(null);
+  var [dataSource, setDataSource] = useState(null);
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
   var userIdRef = useRef(null);
@@ -733,12 +734,14 @@ export default function TaskBrain() {
           setStatus(remote.status ?? "");
           setDark(!!remote.dark);
           setNotes(Array.isArray(remote.notes) ? remote.notes : []);
+          if (!cancelled) setDataSource("cloud");
         } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0 || (local.notes && local.notes.length > 0))) {
           if (local.tasks?.length) setTasks(local.tasks);
           setProfileWithCategories(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
           setNotes(Array.isArray(local.notes) ? local.notes : []);
+          if (!cancelled) setDataSource("local");
           await saveToSupabase(supabase, uid, { tasks: local.tasks, profile: Object.assign({}, local.profile, { categories: local.profile?.categories || [] }), status: local.status, dark: local.dark, notes: Array.isArray(local.notes) ? local.notes : [] });
         } else {
           if (local?.tasks?.length) setTasks(local.tasks);
@@ -746,6 +749,7 @@ export default function TaskBrain() {
           if (local?.status !== undefined) setStatus(local.status);
           if (local?.dark !== undefined) setDark(local.dark);
           setNotes(Array.isArray(local?.notes) ? local.notes : []);
+          if (!cancelled) setDataSource("local");
         }
       } else {
         if (cancelled) return;
@@ -760,6 +764,7 @@ export default function TaskBrain() {
           setProfileWithCategories(DEF_PROFILE);
           setNotes([]);
         }
+        if (!cancelled) setDataSource("local");
       }
       if (!cancelled) setLoaded(true);
     })();
@@ -835,6 +840,22 @@ export default function TaskBrain() {
     document.addEventListener("visibilitychange", onVisible);
     return function() { document.removeEventListener("visibilitychange", onVisible); };
   }, [supabase, user?.id, loaded]);
+
+  var refreshFromCloud = useCallback(function() {
+    if (!supabase || !user?.id) return;
+    loadFromSupabase(supabase, user.id).then(function(remote) {
+      if (!remote) { setToast("拉取失败，请稍后重试"); return; }
+      setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
+      var p = remote.profile;
+      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
+      setProfile(p || {});
+      setStatus(remote.status ?? "");
+      setDark(!!remote.dark);
+      setNotes(Array.isArray(remote.notes) ? remote.notes : []);
+      setDataSource("cloud");
+      setToast("已从云端拉取最新");
+    });
+  }, [supabase, user?.id]);
 
   /* ── Task CRUD ── */
   var addTask = async function(text) {
@@ -1168,7 +1189,11 @@ export default function TaskBrain() {
         ) : user ? (
           <div>
             <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
-            <button onClick={handleLogout} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+            {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地（未连上云端或仅用缓存）"}</div>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={refreshFromCloud} style={{ padding: "6px 12px", border: "1px solid " + T.accent, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
+              <button onClick={handleLogout} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+            </div>
           </div>
         ) : (
           <div>
@@ -1546,7 +1571,11 @@ export default function TaskBrain() {
               ) : user ? (
                 <div>
                   <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
-                  <button onClick={handleLogout} style={{ padding: "4px 10px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出</button>
+                  {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地"}</div>}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" onClick={refreshFromCloud} style={{ padding: "4px 10px", border: "1px solid " + T.accent, borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
+                    <button onClick={handleLogout} style={{ padding: "4px 10px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出</button>
+                  </div>
                 </div>
               ) : (
                 <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "8px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 同步到手机/电脑</button>
@@ -1638,7 +1667,11 @@ export default function TaskBrain() {
             ) : user ? (
               <div>
                 <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 8 }}>已登录：{user.email}</div>
-                <button onClick={handleLogout} style={{ padding: "6px 14px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+                {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地"}</div>}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={refreshFromCloud} style={{ padding: "6px 14px", border: "1px solid " + T.accent, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
+                  <button onClick={handleLogout} style={{ padding: "6px 14px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+                </div>
               </div>
             ) : (
               <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "12px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 与电脑同步</button>

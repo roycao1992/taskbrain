@@ -45,6 +45,27 @@
 - **在 A 地（如电脑）改完保存后，B 地（如手机）会自动收到更新并刷新列表**，无需手动刷新。
 - 需在 Supabase 中开启该表的 Realtime：在 **SQL Editor** 执行 `supabase/migrations/003_realtime_user_data.sql` 中的语句（将 `user_data` 加入 `supabase_realtime` 发布）。若项目从未配置过 Realtime，可先在 Dashboard → Database → Realtime 中确认该表已启用。
 
+## 同一账号在 localhost 和 Vercel 上数据不一致？
+
+常见原因与自检：
+
+1. **Vercel 未配置或未生效的 Supabase 环境变量**
+   - 在 Vercel 项目 **Settings → Environment Variables** 中必须配置 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，且与本地 `.env` 里的是**同一个 Supabase 项目**（同一份数据）。
+   - Vite 在**构建时**会把 `VITE_*` 写进前端代码，所以**改完环境变量后必须点一次 Redeploy**，否则线上用的还是旧构建，可能没连上 Supabase 或连错项目。
+
+2. **看「数据来源」判断当前页用没用上云端**
+   - 登录后，在设置里的「云端同步」区域会显示 **数据来源：云端** 或 **数据来源：本地**。
+   - 若 Vercel 上显示「本地」：说明本次打开没有成功从 Supabase 拉数据（未配置、连错项目或请求失败），用的只是当前浏览器 localStorage，和本地 3000 的 localStorage 不是同一份，所以会不一致。
+   - 两边都显示「云端」且仍不一致：再检查两边是否指向同一 Supabase 项目（URL 一致）。
+
+3. **localStorage 按域名隔离**
+   - `localhost:3000` 和 `https://xxx.vercel.app` 的 localStorage 完全不同。只有「从云端拉到的数据」才是共用的；若某端没连上云端，就只会显示该域名下的本地缓存。
+
+4. **建议操作**
+   - 在 Vercel 确认上述两个环境变量已填且已 Redeploy。
+   - 分别打开 localhost 和 Vercel，登录同一账号，看「数据来源」是否都为「云端」。
+   - 若 Vercel 仍为「本地」，打开 F12 → Network，看是否有请求发往 `*.supabase.co`，以及是否 4xx/5xx。
+
 ## 建议
 
 - 重要操作后稍等 1～2 秒再关页面，确保防抖保存（约 800ms）已把数据推到云端。
