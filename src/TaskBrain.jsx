@@ -143,6 +143,11 @@ function fmtDateWithWeekday(ds) {
   if (!ds) return "";
   return fmtDate(ds) + " " + getWeekday(ds);
 }
+function fmtNoteTime(ts) {
+  if (!ts) return "";
+  var d = new Date(ts);
+  return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
 
 function dlWeek(ds) {
   return ds ? getWeekKey(new Date(ds)) : null;
@@ -175,10 +180,10 @@ function saveLocal(d) {
 
 async function loadFromSupabase(supabase, userId) {
   if (!supabase || !userId) return null;
-  var r = await supabase.from("user_data").select("tasks, profile, status, dark").eq("id", userId).maybeSingle();
+  var r = await supabase.from("user_data").select("tasks, profile, status, dark, notes").eq("id", userId).maybeSingle();
   if (r.error) return null;
   if (!r.data) return null;
-  return { tasks: r.data.tasks || [], profile: r.data.profile || {}, status: r.data.status || "", dark: !!r.data.dark };
+  return { tasks: r.data.tasks || [], profile: r.data.profile || {}, status: r.data.status || "", dark: !!r.data.dark, notes: Array.isArray(r.data.notes) ? r.data.notes : [] };
 }
 
 async function saveToSupabase(supabase, userId, d) {
@@ -189,6 +194,7 @@ async function saveToSupabase(supabase, userId, d) {
     profile: d.profile || {},
     status: d.status ?? "",
     dark: !!d.dark,
+    notes: Array.isArray(d.notes) ? d.notes : [],
     updated_at: new Date().toISOString(),
   }, { onConflict: "id" });
 }
@@ -249,7 +255,7 @@ function buildClsSys(prof) {
 
 function buildDiagSys(prof, stat) {
   var p = prof || {};
-  return "你是Roy的私人AI助手。你们正在对话，Roy可能追问或反驳，你要像了解他的朋友/顾问一样回应。\n\n【背景】\n公司:" + (p.company || "未填写") + "\n个人:" + (p.personal || "未填写") + "\n投资:" + (p.invest || "未填写") + "\n家庭:" + (p.family || "未填写") + "\n\n【当前状态】\n" + (stat || "未填写") + "\n\n要求：1)简洁直接不客套 2)结合状态给建议 3)关注快到期的截止日 4)本周>8就过载 5)工作生活平衡 6)焦虑给具体建议 7)追问时正面回应不重复 8)中文250字内";
+  return "你是Roy的私人AI助手。你们正在对话，Roy可能追问或反驳，你要像了解他的朋友/顾问一样回应。\n\n【背景】\n公司:" + (p.company || "未填写") + "\n个人:" + (p.personal || "未填写") + "\n投资:" + (p.invest || "未填写") + "\n家庭:" + (p.family || "未填写") + "\n\n【当前状态】\n" + (stat || "未填写") + "\n\n若用户提供了【最近随笔】，可结合随笔内容给建议。\n\n要求：1)简洁直接不客套 2)结合状态给建议 3)关注快到期的截止日 4)本周>8就过载 5)工作生活平衡 6)焦虑给具体建议 7)追问时正面回应不重复 8)中文250字内";
 }
 
 var SYS_WK = "你是Roy的任务管理助手。从待安排挑任务到本周。1)合计不超8-10 2)高优先先排 3)空白分类补一个。返回JSON: [{\"taskId\":\"id\",\"reason\":\"一句话\"}]";
@@ -656,6 +662,12 @@ export default function TaskBrain() {
   var [catEditingId, setCatEditingId] = useState(null);
   var [catEditLabel, setCatEditLabel] = useState("");
   var [catEditEmoji, setCatEditEmoji] = useState("");
+  var [notes, setNotes] = useState([]);
+  var [noteEditingId, setNoteEditingId] = useState(null);
+  var [noteEditContent, setNoteEditContent] = useState("");
+  var [noteNewContent, setNoteNewContent] = useState("");
+  var [noteNewExpanded, setNoteNewExpanded] = useState(false);
+  var [noteConvertingId, setNoteConvertingId] = useState(null);
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
   var userIdRef = useRef(null);
@@ -715,22 +727,25 @@ export default function TaskBrain() {
       if (supabase && uid) {
         var remote = await loadFromSupabase(supabase, uid);
         if (cancelled) return;
-        if (remote && (remote.tasks?.length > 0 || Object.keys(remote.profile || {}).length > 0)) {
-          if (remote.tasks?.length) setTasks(remote.tasks);
+        if (remote) {
+          setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
           setProfileWithCategories(remote.profile);
-          if (remote.status !== undefined) setStatus(remote.status);
-          if (remote.dark !== undefined) setDark(remote.dark);
-        } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0)) {
+          setStatus(remote.status ?? "");
+          setDark(!!remote.dark);
+          setNotes(Array.isArray(remote.notes) ? remote.notes : []);
+        } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0 || (local.notes && local.notes.length > 0))) {
           if (local.tasks?.length) setTasks(local.tasks);
           setProfileWithCategories(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
-          await saveToSupabase(supabase, uid, { tasks: local.tasks, profile: Object.assign({}, local.profile, { categories: local.profile?.categories || [] }), status: local.status, dark: local.dark });
+          setNotes(Array.isArray(local.notes) ? local.notes : []);
+          await saveToSupabase(supabase, uid, { tasks: local.tasks, profile: Object.assign({}, local.profile, { categories: local.profile?.categories || [] }), status: local.status, dark: local.dark, notes: Array.isArray(local.notes) ? local.notes : [] });
         } else {
           if (local?.tasks?.length) setTasks(local.tasks);
           setProfileWithCategories(local?.profile);
           if (local?.status !== undefined) setStatus(local.status);
           if (local?.dark !== undefined) setDark(local.dark);
+          setNotes(Array.isArray(local?.notes) ? local.notes : []);
         }
       } else {
         if (cancelled) return;
@@ -739,9 +754,11 @@ export default function TaskBrain() {
           setProfileWithCategories(local.profile);
           if (local.status !== undefined) setStatus(local.status);
           if (local.dark !== undefined) setDark(local.dark);
+          setNotes(Array.isArray(local.notes) ? local.notes : []);
         } else {
           setTasks([]);
           setProfileWithCategories(DEF_PROFILE);
+          setNotes([]);
         }
       }
       if (!cancelled) setLoaded(true);
@@ -752,7 +769,7 @@ export default function TaskBrain() {
   /* ── 保存：始终写本地；已登录则防抖写 Supabase ── */
   useEffect(function() {
     if (!loaded) return;
-    var payload = { tasks: tasks, profile: profile, status: status, dark: dark };
+    var payload = { tasks: tasks, profile: profile, status: status, dark: dark, notes: notes };
     saveLocal(payload);
     if (supabase && user) {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -764,7 +781,60 @@ export default function TaskBrain() {
     return function() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [tasks, profile, status, dark, loaded, supabase, user?.id]);
+  }, [tasks, profile, status, dark, notes, loaded, supabase, user?.id]);
+
+  /* ── Realtime：订阅当前用户的 user_data 变更，A 端修改后 B 端自动更新 ── */
+  useEffect(function() {
+    if (!supabase || !user?.id || !loaded) return;
+    var uid = user.id;
+    function applyRemote(row) {
+      if (!row) return;
+      setTasks(Array.isArray(row.tasks) ? row.tasks : []);
+      var p = row.profile;
+      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
+      setProfile(p || {});
+      setStatus(row.status ?? "");
+      setDark(!!row.dark);
+      setNotes(Array.isArray(row.notes) ? row.notes : []);
+    }
+    function onRealtimePayload(payload) {
+      if (payload && payload.new) {
+        applyRemote(payload.new);
+        if (typeof console !== "undefined" && console.debug) console.debug("[TaskBrain] 已从其他端同步", payload.event);
+      }
+    }
+    var channel = supabase
+      .channel("user_data:" + uid)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "user_data", filter: "id=eq." + uid }, onRealtimePayload)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "user_data", filter: "id=eq." + uid }, onRealtimePayload)
+      .subscribe(function(status) {
+        if (status === "SUBSCRIBED" && typeof console !== "undefined" && console.debug) console.debug("[TaskBrain] Realtime 已连接");
+        if (status === "CHANNEL_ERROR") console.warn("[TaskBrain] Realtime 未连接：请在 Supabase Dashboard → Database → Replication 中勾选 user_data，或在 SQL Editor 执行 migrations/003_realtime_user_data.sql");
+      });
+    return function() { supabase.removeChannel(channel); };
+  }, [supabase, user?.id, loaded]);
+
+  /* ── 切回标签页时拉取一次：Realtime 未触发时，回到本页可拿到最新数据 ── */
+  useEffect(function() {
+    if (!supabase || !user?.id || !loaded) return;
+    var uid = user.id;
+    function applyRemote(remote) {
+      if (!remote) return;
+      setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
+      var p = remote.profile;
+      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
+      setProfile(p || {});
+      setStatus(remote.status ?? "");
+      setDark(!!remote.dark);
+      setNotes(Array.isArray(remote.notes) ? remote.notes : []);
+    }
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      loadFromSupabase(supabase, uid).then(applyRemote);
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return function() { document.removeEventListener("visibilitychange", onVisible); };
+  }, [supabase, user?.id, loaded]);
 
   /* ── Task CRUD ── */
   var addTask = async function(text) {
@@ -836,6 +906,69 @@ export default function TaskBrain() {
   function addSub(tid, text) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).concat([{ id: tid + "_" + Date.now(), text: text, done: false }]) }) : t; }); }); }
   function toggleSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).map(function(s) { return s.id === sid ? Object.assign({}, s, { done: !s.done }) : s; }) }) : t; }); }); }
   function removeSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).filter(function(s) { return s.id !== sid; }) }) : t; }); }); }
+  function addNote(content) {
+    var c = String(content || "").trim();
+    if (!c) return;
+    var now = Date.now();
+    setNotes(function(p) { return [{ id: now.toString(), content: c, createdAt: now, updatedAt: now }].concat(p); });
+    setNoteNewContent(""); setNoteNewExpanded(false);
+  }
+  function updateNote(id, content) {
+    var c = String(content || "").trim();
+    setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { content: c, updatedAt: Date.now() }) : n; }); });
+    setNoteEditingId(null); setNoteEditContent("");
+  }
+  function removeNote(id) {
+    if (!window.confirm("确定删除这条随笔？")) return;
+    setNotes(function(p) { return p.filter(function(n) { return n.id !== id; }); });
+    if (noteEditingId === id) { setNoteEditingId(null); setNoteEditContent(""); }
+  }
+
+  var convertNoteToTask = async function(n) {
+    if (!n || !n.content || noteConvertingId) return;
+    setNoteConvertingId(n.id);
+    var today = new Date().toISOString().split("T")[0];
+    var cwMon = getWeekRange(CW).mon;
+    var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
+    var userMsg = "把下面这段随笔整理成一个任务，今日日期：" + today + "，本周周一：" + cwMonStr + "\n\n" + (n.content || "").trim();
+    var r = await callAI(buildClsSys(profile), [{ role: "user", content: userMsg }]);
+    if (r) {
+      try {
+        var raw = r.replace(/```json|```/g, "").trim();
+        var parsed = JSON.parse(raw);
+        var refined = (parsed.refinedText && String(parsed.refinedText).trim()) || (n.content || "").trim().slice(0, 200);
+        var dl = parsed.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.deadline)) ? parsed.deadline : null;
+        var wk = (parsed.week && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.week)) ? parsed.week : null) || null;
+        var typ = parsed.type === "deadline" || dl ? "deadline" : "week";
+        if (typ === "deadline") wk = null;
+        if (typ === "week" && !wk) wk = null;
+        var defaultCat = categories.length > 0 ? categories[0].id : "";
+        var resolvedCatId = defaultCat;
+        if (parsed.newCategory && String(parsed.newCategory).trim()) {
+          var newLabel = String(parsed.newCategory).trim();
+          var newId = slugForCategory(newLabel);
+          var existing = (profile.categories || []).find(function(c) { return c.id === newId || c.label === newLabel; });
+          if (!existing) {
+            var newCat = { id: newId, label: newLabel, emoji: parsed.newEmoji && String(parsed.newEmoji).trim() ? String(parsed.newEmoji).trim().slice(0, 2) : "📌" };
+            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([newCat]) }); });
+            resolvedCatId = newId;
+          } else {
+            resolvedCatId = existing.id;
+          }
+        } else if (parsed.category && (profile.categories || []).some(function(c) { return c.id === parsed.category; })) {
+          resolvedCatId = parsed.category;
+        }
+        var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
+        var taskId = Date.now().toString();
+        var newTask = { id: taskId, text: refined, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
+        setTasks(function(prev) { return [newTask].concat(prev); });
+        setToast("已转为任务：" + refined);
+      } catch (e) { setToast("转化失败，请重试"); }
+    } else {
+      setToast("AI 暂时不可用");
+    }
+    setNoteConvertingId(null);
+  };
 
   async function handleLogin() {
     if (!supabase) return;
@@ -892,7 +1025,7 @@ export default function TaskBrain() {
   }
 
   function exportJSON() {
-    var data = JSON.stringify({ tasks: tasks, profile: profile, status: status, exportedAt: new Date().toISOString() }, null, 2);
+    var data = JSON.stringify({ tasks: tasks, profile: profile, status: status, notes: notes, exportedAt: new Date().toISOString() }, null, 2);
     var blob = new Blob([data], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -911,7 +1044,13 @@ export default function TaskBrain() {
       var subs = (t.subtasks || []).length > 0 ? " [子任务:" + t.subtasks.filter(function(s) { return s.done; }).length + "/" + t.subtasks.length + "]" : "";
       return "[" + (t.type === "deadline" ? "截止日" : "周") + "][" + (c ? c.label : "") + "][" + (p ? p.label : "") + "][" + time + "] " + t.text + subs;
     });
-    return "今天=" + today + "，" + getWeekLabel(CW, CW) + "\n\n未完成(" + lines.length + "个):\n" + lines.join("\n");
+    var out = "今天=" + today + "，" + getWeekLabel(CW, CW) + "\n\n未完成(" + lines.length + "个):\n" + lines.join("\n");
+    var threeDaysAgo = Date.now() - 3 * 864e5;
+    var recentNotes = (notes || []).filter(function(n) { return (n.createdAt || 0) >= threeDaysAgo; }).slice(0, 5);
+    if (recentNotes.length > 0) {
+      out += "\n\n【最近随笔】\n" + recentNotes.map(function(n) { return "- " + fmtNoteTime(n.createdAt) + "：" + (n.content || "").slice(0, 80).replace(/\n/g, " "); }).join("\n");
+    }
+    return out;
   }
 
   var diagnose = async function() {
@@ -955,6 +1094,11 @@ export default function TaskBrain() {
       var p = PRIORITIES.find(function(x) { return x.id === t.priority; });
       return "id:" + t.id + " [" + (c ? c.label : "") + "][" + (p ? p.label : "") + "] " + t.text;
     }).join("\n");
+    var threeDaysAgo = Date.now() - 3 * 864e5;
+    var recentNotes = (notes || []).filter(function(n) { return (n.createdAt || 0) >= threeDaysAgo; }).slice(0, 5);
+    if (recentNotes.length > 0) {
+      msg += "\n\n【最近随笔】\n" + recentNotes.map(function(n) { return "- " + fmtNoteTime(n.createdAt) + "：" + (n.content || "").slice(0, 80).replace(/\n/g, " "); }).join("\n");
+    }
 
     var r = await callAI(SYS_WK, [{ role: "user", content: msg }]);
     if (r) {
@@ -1287,6 +1431,59 @@ export default function TaskBrain() {
         </div>
       )}
 
+      {/* ── NOTES VIEW ── */}
+      {view === "notes" && (
+        <div>
+          <div style={{ marginBottom: 20 }}>
+            {!noteNewExpanded ? (
+              <button type="button" onClick={function() { setNoteNewExpanded(true); }} style={{ padding: "10px 18px", background: T.card, border: "1px dashed " + T.cardBorder, borderRadius: 10, fontSize: 14, fontWeight: 600, color: T.textSec, cursor: "pointer", fontFamily: FONT, width: "100%", textAlign: "left" }}>📝 写随笔</button>
+            ) : (
+              <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
+                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} placeholder="随便写点什么..."
+                  style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 10 }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" onClick={function() { addNote(noteNewContent); }} disabled={!noteNewContent.trim()} style={{ padding: "8px 16px", background: noteNewContent.trim() ? T.accent : T.inputBorder, color: noteNewContent.trim() ? "#fff" : T.textMuted, border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: noteNewContent.trim() ? "pointer" : "default", fontFamily: FONT }}>保存</button>
+                  <button type="button" onClick={function() { setNoteNewExpanded(false); setNoteNewContent(""); }} style={{ padding: "8px 16px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                </div>
+              </div>
+            )}
+          </div>
+          {notes.length === 0 ? (
+            <Empty msg="还没有随笔，点击上方写一条吧" />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {notes.map(function(n) {
+                var isEditing = noteEditingId === n.id;
+                var summary = (n.content || "").length > 80 ? (n.content || "").slice(0, 80) + "…" : (n.content || "");
+                return (
+                  <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
+                    {isEditing ? (
+                      <div>
+                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 10 }} />
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button type="button" onClick={function() { updateNote(n.id, noteEditContent); }} style={{ padding: "6px 14px", background: T.accent, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT }}>保存</button>
+                          <button type="button" onClick={function() { setNoteEditingId(null); setNoteEditContent(""); }} style={{ padding: "6px 14px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 14, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: 8 }}>{summary}</div>
+                        <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>{fmtNoteTime(n.updatedAt || n.createdAt)}</div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
+                          <button type="button" onClick={function() { removeNote(n.id); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: "#DC2626" }}>删除</button>
+                          <button type="button" onClick={function() { convertNoteToTask(n); }} disabled={noteConvertingId === n.id} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: noteConvertingId === n.id ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>{noteConvertingId === n.id ? "转化中…" : "AI 转为任务"}</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── DONE (collapsed) ── */}
       {doneList.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -1327,7 +1524,7 @@ export default function TaskBrain() {
 
             {/* Vertical Nav */}
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 20 }}>
-              {[{ id: "week", l: "📌 按周" }, { id: "deadline", l: "📅 截止日" }, { id: "category", l: "🏷 按分类" }].map(function(v) {
+              {[{ id: "week", l: "📌 按周" }, { id: "deadline", l: "📅 截止日" }, { id: "category", l: "🏷 按分类" }, { id: "notes", l: "📝 随笔" }].map(function(v) {
                 return (
                   <button key={v.id} onClick={function() { setView(v.id); }} style={{
                     padding: "9px 12px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600,
@@ -1369,7 +1566,7 @@ export default function TaskBrain() {
 
           {/* ── MAIN CONTENT ── */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            {taskInputJSX}
+            {view !== "notes" && taskInputJSX}
             {taskListsJSX}
           </div>
 
@@ -1385,6 +1582,7 @@ export default function TaskBrain() {
                   { l: "待安排", v: backlog.length, a: T.textSec },
                   { l: "截止日", v: allDL.length, a: "#DC2626", w: allDL.some(function(t) { return daysUntil(t.deadline) <= 3; }) },
                   { l: "完成", v: doneList.length, a: "#10B981" },
+                  { l: "随笔", v: notes.length, a: T.textSec },
                 ].map(function(s) {
                   return (
                     <div key={s.l} style={{ padding: "12px 14px", background: T.card, borderRadius: 10, border: "1px solid " + (s.w ? "#FCA5A5" : T.cardBorder), boxShadow: T.shadow }}>
@@ -1450,7 +1648,7 @@ export default function TaskBrain() {
           {settingsJSX}
           {profileJSX}
 
-          {taskInputJSX}
+          {view !== "notes" && taskInputJSX}
 
           {/* Stats */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -1459,6 +1657,7 @@ export default function TaskBrain() {
               { l: "待安排", v: backlog.length, a: T.textSec },
               { l: "截止日", v: allDL.length, a: "#DC2626", w: allDL.some(function(t) { return daysUntil(t.deadline) <= 3; }) },
               { l: "完成", v: doneList.length, a: "#10B981" },
+              { l: "随笔", v: notes.length, a: T.textSec },
             ].map(function(s) {
               return (
                 <div key={s.l} style={{ flex: 1, minWidth: 70, padding: "12px 14px", background: T.card, borderRadius: 10, border: "1px solid " + (s.w ? "#FCA5A5" : T.cardBorder), boxShadow: T.shadow }}>
@@ -1481,7 +1680,7 @@ export default function TaskBrain() {
 
           {/* View Tabs */}
           <div style={{ display: "flex", gap: 2, marginBottom: 20, background: T.tabBg, borderRadius: 10, padding: 3 }}>
-            {[{ id: "week", l: "按周" }, { id: "deadline", l: "📅 截止日" }, { id: "category", l: "按分类" }].map(function(v) {
+            {[{ id: "week", l: "按周" }, { id: "deadline", l: "📅 截止日" }, { id: "category", l: "按分类" }, { id: "notes", l: "📝 随笔" }].map(function(v) {
               return (
                 <button key={v.id} onClick={function() { setView(v.id); }} style={{
                   flex: 1, padding: "9px 0", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600,

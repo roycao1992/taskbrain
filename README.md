@@ -44,6 +44,16 @@ cp .env.example .env
 
 重启 `npm run dev` 后，打开应用点 ⚙️，在「云端同步」下用邮箱注册/登录即可。数据会自动同步；未登录时仍只存本地。
 
+### 5. 实时同步（多端同时更新）
+
+在 A 端改任务后，希望 B 端（另一浏览器/设备）**不刷新也能立刻看到更新**，需要为表开启 Realtime：
+
+1. 打开 Supabase 控制台 → **Database** → **Replication**
+2. 在 **Supabase Realtime** 的表格列表中，找到 `user_data` 并**勾选启用**
+3. 若列表里没有该表，可在 **SQL Editor** 执行：`supabase/migrations/003_realtime_user_data.sql` 中的语句（`alter publication supabase_realtime add table public.user_data;`）
+
+开启后，多端登录同一账号时，一端修改会实时推到另一端。
+
 ---
 
 ## 配置 AI 功能
