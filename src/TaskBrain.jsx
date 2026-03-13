@@ -697,6 +697,8 @@ export default function TaskBrain() {
   var [dataSource, setDataSource] = useState(null);
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
+  var saveFlushRef = useRef(null);
+  var profileOrStatusFocusedRef = useRef(false);
   var userIdRef = useRef(null);
   var supabase = getSupabase();
 
@@ -797,11 +799,16 @@ export default function TaskBrain() {
     return function() { cancelled = true; };
   }, [authReady, supabase, user?.id]);
 
-  /* ── 保存：始终写本地；已登录则防抖写 Supabase ── */
+  /* ── 保存：始终写本地；已登录则防抖写 Supabase；blur 时通过 saveFlushRef 立即写入 ── */
   useEffect(function() {
     if (!loaded) return;
     var payload = { tasks: tasks, profile: profile, status: status, dark: dark, notes: notes };
     saveLocal(payload);
+    saveFlushRef.current = function() {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+      if (supabase && user) saveToSupabase(supabase, user.id, payload);
+    };
     if (supabase && user) {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(function() {
@@ -821,10 +828,12 @@ export default function TaskBrain() {
     function applyRemote(row) {
       if (!row) return;
       setTasks(Array.isArray(row.tasks) ? row.tasks : []);
-      var p = row.profile;
-      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
-      setProfile(p || {});
-      setStatus(row.status ?? "");
+      if (!profileOrStatusFocusedRef.current) {
+        var p = row.profile;
+        if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
+        setProfile(p || {});
+        setStatus(row.status ?? "");
+      }
       setDark(!!row.dark);
       setNotes(Array.isArray(row.notes) ? row.notes : []);
     }
@@ -852,10 +861,12 @@ export default function TaskBrain() {
     function applyRemote(remote) {
       if (!remote) return;
       setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
-      var p = remote.profile;
-      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
-      setProfile(p || {});
-      setStatus(remote.status ?? "");
+      if (!profileOrStatusFocusedRef.current) {
+        var p = remote.profile;
+        if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
+        setProfile(p || {});
+        setStatus(remote.status ?? "");
+      }
       setDark(!!remote.dark);
       setNotes(Array.isArray(remote.notes) ? remote.notes : []);
     }
@@ -1323,7 +1334,15 @@ export default function TaskBrain() {
   ) : null;
 
   var profileJSX = showProf ? (
-    <div style={{ background: T.profBg, border: "1px solid " + T.profBorder, borderRadius: 12, padding: 18, marginBottom: 20 }}>
+    <div
+      style={{ background: T.profBg, border: "1px solid " + T.profBorder, borderRadius: 12, padding: 18, marginBottom: 20 }}
+      onFocusOut={function(e) {
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          profileOrStatusFocusedRef.current = false;
+          saveFlushRef.current?.();
+        }
+      }}
+    >
       {[
         { key: "company", label: "🏢 公司", hint: "公司、团队、业务" },
         { key: "personal", label: "👤 个人", hint: "背景、日常" },
@@ -1333,15 +1352,24 @@ export default function TaskBrain() {
         return (
           <div key={f.key} style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 4 }}>{f.label}</div>
-            <textarea value={profile[f.key] || ""} onChange={function(e) { setProfile(function(p) { var next = Object.assign({}, p); next[f.key] = e.target.value; return next; }); }} placeholder={f.hint}
-              style={{ width: "100%", minHeight: 52, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box" }} />
+            <textarea
+              value={profile[f.key] || ""}
+              onChange={function(e) { setProfile(function(p) { var next = Object.assign({}, p); next[f.key] = e.target.value; return next; }); }}
+              onFocus={function() { profileOrStatusFocusedRef.current = true; }}
+              placeholder={f.hint}
+              style={{ width: "100%", minHeight: 52, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box" }}
+            />
           </div>
         );
       })}
       <div style={{ borderTop: "1px solid " + T.profBorder, paddingTop: 12, marginTop: 4 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 4 }}>💭 当前状态</div>
-        <textarea value={status} onChange={function(e) { setStatus(e.target.value); }}
-          style={{ width: "100%", minHeight: 56, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box" }} />
+        <textarea
+          value={status}
+          onChange={function(e) { setStatus(e.target.value); }}
+          onFocus={function() { profileOrStatusFocusedRef.current = true; }}
+          style={{ width: "100%", minHeight: 56, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box" }}
+        />
       </div>
       <div style={{ fontSize: 11, color: T.textMuted, marginTop: 8 }}>💡 一键诊断时AI会参考这些信息</div>
     </div>
@@ -1628,10 +1656,10 @@ export default function TaskBrain() {
               )}
             </div>
 
-            {/* Icon Buttons：仅 ⚙️ 用延迟关闭避免输入框聚焦时卡住 */}
+            {/* Icon Buttons：仅 ⚙️ 用延迟关闭避免输入框聚焦时卡住；👤 与 ⚙️ 互斥，只展开一个 */}
             <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-              <HeaderBtn onClick={function() { setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
-              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowExport(function(p) { return !p; }); }); } else { setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
+              <HeaderBtn onClick={function() { setShowExport(false); setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
+              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowProf(false); setShowExport(function(p) { return !p; }); }); } else { setShowProf(false); setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
               <HeaderBtn onClick={function() { setDark(function(p) { return !p; }); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
 
@@ -1699,8 +1727,8 @@ export default function TaskBrain() {
               </span>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <HeaderBtn onClick={function() { setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
-              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowExport(function(p) { return !p; }); }); } else { setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
+              <HeaderBtn onClick={function() { setShowExport(false); setShowProf(function(p) { return !p; }); }} active={showProf} T={T}>👤</HeaderBtn>
+              <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowProf(false); setShowExport(function(p) { return !p; }); }); } else { setShowProf(false); setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
               <HeaderBtn onClick={function() { setDark(function(p) { return !p; }); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
           </div>
