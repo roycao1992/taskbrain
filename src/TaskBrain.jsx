@@ -684,6 +684,7 @@ export default function TaskBrain() {
   var [catEditLabel, setCatEditLabel] = useState("");
   var [catEditEmoji, setCatEditEmoji] = useState("");
   var [notes, setNotes] = useState([]);
+  var [noteExpandedId, setNoteExpandedId] = useState(null);
   var [noteEditingId, setNoteEditingId] = useState(null);
   var [noteEditContent, setNoteEditContent] = useState("");
   var [noteNewContent, setNoteNewContent] = useState("");
@@ -1516,7 +1517,22 @@ export default function TaskBrain() {
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: 14, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: 8 }}>{summary}</div>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={function() { if ((n.content || "").length > 80) setNoteExpandedId(noteExpandedId === n.id ? null : n.id); }}
+                          onKeyDown={function(e) { if ((n.content || "").length > 80 && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setNoteExpandedId(noteExpandedId === n.id ? null : n.id); } }}
+                          style={{
+                            fontSize: 14, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: 8,
+                            cursor: (n.content || "").length > 80 ? "pointer" : "default",
+                            userSelect: "text",
+                          }}
+                        >
+                          {noteExpandedId === n.id ? (n.content || "") : summary}
+                          {(n.content || "").length > 80 && (
+                            <span style={{ fontSize: 12, color: T.accent, marginLeft: 6 }}>{noteExpandedId === n.id ? " 收起 ▴" : " 展开 ▾"}</span>
+                          )}
+                        </div>
                         <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>{fmtNoteTime(n.updatedAt || n.createdAt)}</div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
