@@ -241,16 +241,17 @@ function buildClsSys(prof) {
     ? "当前分类（只能选其一）：\n" + cats.map(function(c) { return "id: " + c.id + " 标签: " + (c.emoji || "") + " " + (c.label || c.id); }).join("\n") + "\n若没有合适分类，可返回 newCategory: \"新分类名\" 与可选 newEmoji（如 📌），将自动创建；否则 category 填上述已有 id。"
     : "用户暂无分类。请返回 newCategory: \"分类名\" 与 newEmoji（如 📌），将自动创建该分类；category 可留空。";
   return "你是任务管理助手。根据用户的一段描述，你需要：\n"
-    + "1) 提炼关键信息 → 生成简洁的任务标题 refinedText（去掉口语、冗余，保留动作+对象）\n"
-    + "2) 从描述中识别截止日/时间 → 若有「下周三」「3月20号」「本周五前」等，推算出具体日期，填 deadline（YYYY-MM-DD）；没有则 null\n"
-    + "3) 判断是周任务还是截止日任务 → 有明确截止日填 type:deadline，否则 type:week\n"
-    + "4) 若是周任务且能推断目标周（如「本周」「下周」）→ 填 week 为该周周一的 YYYY-MM-DD；无法推断或待安排则 week:null\n"
-    + "5) 分类与优先级 → category 或 newCategory；priority\n\n"
+    + "1) 提炼关键信息 → 生成简洁的任务标题 refinedText（去掉口语、冗余，保留动作+对象，控制在 15 字内为宜）\n"
+    + "2) 备注 detail：不需要每个任务都有备注。只有信息较复杂、在标题里无法体现的关键信息（如具体时间、地点、规格、人数等）才填 detail；简单任务或标题已能表达清楚的，detail 留空。detail 最多一两句话。\n"
+    + "3) 从描述中识别截止日/时间 → 若有「下周三」「3月20号」「本周五前」等，推算出具体日期，填 deadline（YYYY-MM-DD）；没有则 null\n"
+    + "4) 判断是周任务还是截止日任务 → 有明确截止日填 type:deadline，否则 type:week\n"
+    + "5) 若是周任务且能推断目标周（如「本周」「下周」）→ 填 week 为该周周一的 YYYY-MM-DD；无法推断或待安排则 week:null\n"
+    + "6) 分类与优先级 → category 或 newCategory；priority\n\n"
     + (bg ? "【背景】\n" + bg + "\n\n" : "")
     + catHint + "\n\n"
     + "优先级id: urgent, high, medium, low\n"
     + "只返回一个JSON，不要markdown包裹：\n"
-    + "{\"refinedText\":\"提炼后的任务标题\",\"category\":\"已有id或留空\",\"newCategory\":\"新分类名或留空\",\"newEmoji\":\"可选如📌\",\"priority\":\"id\",\"type\":\"week或deadline\",\"deadline\":\"YYYY-MM-DD或null\",\"week\":\"YYYY-MM-DD或null\",\"reason\":\"一句话\"}";
+    + "{\"refinedText\":\"精简标题\",\"detail\":\"细节备注或留空\",\"category\":\"已有id或留空\",\"newCategory\":\"新分类名或留空\",\"newEmoji\":\"可选如📌\",\"priority\":\"id\",\"type\":\"week或deadline\",\"deadline\":\"YYYY-MM-DD或null\",\"week\":\"YYYY-MM-DD或null\",\"reason\":\"一句话\"}";
 }
 
 function buildDiagSys(prof, stat) {
@@ -426,6 +427,8 @@ function TaskItem(props) {
   var [eWk, setEWk] = useState(task.week || "");
   var [eType, setEType] = useState(task.type);
   var [eDL, setEDL] = useState(task.deadline || "");
+  var [eText, setEText] = useState(task.text);
+  var [eDetail, setEDetail] = useState(task.detail || "");
   var [localSub, setLocalSub] = useState("");
 
   // Force open from parent
@@ -456,10 +459,14 @@ function TaskItem(props) {
     setEWk(task.week || "");
     setEType(task.type);
     setEDL(task.deadline || "");
+    setEText(task.text);
+    setEDetail(task.detail || "");
   }
 
   function handleSave() {
     props.onUpdate(task.id, {
+      text: (eText && String(eText).trim()) || task.text,
+      detail: eDetail ? String(eDetail).trim() : "",
       category: eCat, priority: ePri, type: eType,
       week: eType === "week" ? (eWk || null) : null,
       deadline: eType === "deadline" ? (eDL || null) : null,
@@ -499,9 +506,15 @@ function TaskItem(props) {
             fontSize: 14, fontWeight: 500,
             color: task.done ? T.textMuted : T.text,
             textDecoration: task.done ? "line-through" : "none",
-            lineHeight: 1.5, marginBottom: 6,
+            lineHeight: 1.5,
           }}>{task.text}</div>
-
+          {(task.detail || "").trim() && (
+            <div style={{
+              fontSize: 11, color: T.textMuted, lineHeight: 1.4, marginTop: 3, marginBottom: 6,
+              paddingLeft: 0, fontStyle: "normal",
+            }}>{task.detail.trim()}</div>
+          )}
+          {!(task.detail || "").trim() && <div style={{ marginBottom: 6 }} />}
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             {catObj && catColor && (
               <span style={{ fontSize: 11, fontWeight: 600, color: catColor.color, background: catColor.bg, border: "1px solid " + catColor.border, borderRadius: 6, padding: "1px 7px", whiteSpace: "nowrap" }}>
@@ -556,7 +569,14 @@ function TaskItem(props) {
 
       {/* Edit panel */}
       {isEdit && (
-        <div style={{ display: "flex", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid " + T.cardBorder, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid " + T.cardBorder }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>任务标题</div>
+            <input type="text" value={eText} onChange={function(e) { setEText(e.target.value); }} style={{ width: "100%", padding: "8px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: FONT, outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
+            <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>备注细节（可选）</div>
+            <textarea value={eDetail} onChange={function(e) { setEDetail(e.target.value); }} placeholder="时间、地点、规格等补充信息" rows={2} style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.4, boxSizing: "border-box" }} />
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <SelectBox value={eCat} onChange={setECat} T={T}>
             <option value="">未分类</option>
             {(props.categories || []).map(function(c) { return <option key={c.id} value={c.id}>{(c.emoji || "📌") + " " + (c.label || c.id)}</option>; })}
@@ -584,6 +604,7 @@ function TaskItem(props) {
             fontSize: 12, fontWeight: 600, color: "#fff", background: T.accent,
             border: "none", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontFamily: FONT,
           }}>保存</button>
+          </div>
         </div>
       )}
 
@@ -866,7 +887,7 @@ export default function TaskBrain() {
     var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
     var defaultCat = categories.length > 0 ? categories[0].id : "";
 
-    var newTask = { id: id, text: text, category: defaultCat, priority: "medium", type: hasDL ? "deadline" : "week", week: null, deadline: hasDL ? addDL : null, done: false, subtasks: [] };
+    var newTask = { id: id, text: text, detail: "", category: defaultCat, priority: "medium", type: hasDL ? "deadline" : "week", week: null, deadline: hasDL ? addDL : null, done: false, subtasks: [] };
     setTasks(function(p) { return [newTask].concat(p); });
     setInput(""); setAddDL(""); setClassifying(true);
 
@@ -900,11 +921,13 @@ export default function TaskBrain() {
         }
         var cat = (profile.categories || []).find(function(c) { return c.id === resolvedCatId; }) || (resolvedCatId ? { id: resolvedCatId, label: resolvedCatId, emoji: "📌" } : null);
         var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
+        var detailStr = (parsed.detail && String(parsed.detail).trim()) || "";
         setTasks(function(prev) {
           return prev.map(function(t) {
             if (t.id !== id) return t;
             return Object.assign({}, t, {
               text: refined,
+              detail: detailStr,
               category: resolvedCatId,
               priority: (pri && pri.id) || t.priority,
               type: typ,
@@ -913,7 +936,7 @@ export default function TaskBrain() {
             });
           });
         });
-        var msg = (refined !== text ? "已提炼为：「" + refined + "」 · " : "") + (cat ? (cat.emoji || "📌") + " " + (cat.label || resolvedCatId) : "") + (pri ? " · " + pri.label : "") + (parsed.reason ? " — " + parsed.reason : "");
+        var msg = (refined !== text ? "已提炼为：「" + refined + "」" + (detailStr ? "（含备注）" : "") + " · " : "") + (cat ? (cat.emoji || "📌") + " " + (cat.label || resolvedCatId) : "") + (pri ? " · " + pri.label : "") + (parsed.reason ? " — " + parsed.reason : "");
         setToast(msg);
       } catch (e) { /* parse error */ }
     }
@@ -981,7 +1004,8 @@ export default function TaskBrain() {
         }
         var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
         var taskId = Date.now().toString();
-        var newTask = { id: taskId, text: refined, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
+        var detailStr = (parsed.detail && String(parsed.detail).trim()) || "";
+        var newTask = { id: taskId, text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
         setTasks(function(prev) { return [newTask].concat(prev); });
         setToast("已转为任务：" + refined);
       } catch (e) { setToast("转化失败，请重试"); }
