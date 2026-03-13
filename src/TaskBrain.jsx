@@ -1208,37 +1208,39 @@ export default function TaskBrain() {
   /* Shared JSX fragments */
   var settingsJSX = showExport ? (
     <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, marginBottom: 16 }}>
-      {/* 云端同步 Supabase */}
-      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>☁️ 云端同步</div>
-        {!supabase ? (
-          <div style={{ fontSize: 11, color: T.textMuted }}>
-            未配置 Supabase。本地：在 .env 填写 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY；Vercel：在项目 Settings → Environment Variables 添加后重新部署。
-          </div>
-        ) : user ? (
-          <div>
-            <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
-            {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地（未连上云端或仅用缓存）"}</div>}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={refreshFromCloud} style={{ padding: "6px 12px", border: "1px solid " + T.accent, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
-              <button onClick={handleLogout} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+      {/* 云端同步：仅手机端在设置里展示，PC 端由侧栏单独展示 */}
+      {!isDesktop && (
+        <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>☁️ 云端同步</div>
+          {!supabase ? (
+            <div style={{ fontSize: 11, color: T.textMuted }}>
+              未配置 Supabase。本地：在 .env 填写 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY；Vercel：在项目 Settings → Environment Variables 添加后重新部署。
             </div>
-          </div>
-        ) : (
-          <div>
-            <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>登录后电脑与手机将同步同一份数据，请用同一账号在两端登录。</div>
-            <input type="email" value={authEmail} onChange={function(e) { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="邮箱"
-              style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
-            <input type="password" value={authPassword} onChange={function(e) { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="密码（至少 6 位）"
-              style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
-            {authError && <div style={{ fontSize: 11, color: "#DC2626", marginBottom: 6 }}>{authError}</div>}
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleLogin} disabled={authLoading} style={{ padding: "6px 12px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>登录</button>
-              <button onClick={handleSignup} disabled={authLoading} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>注册</button>
+          ) : user ? (
+            <div>
+              <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 6 }}>已登录：{user.email}</div>
+              {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地（未连上云端或仅用缓存）"}</div>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={refreshFromCloud} style={{ padding: "6px 12px", border: "1px solid " + T.accent, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
+                <button onClick={handleLogout} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>登录后电脑与手机将同步同一份数据，请用同一账号在两端登录。</div>
+              <input type="email" value={authEmail} onChange={function(e) { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="邮箱"
+                style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+              <input type="password" value={authPassword} onChange={function(e) { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="密码（至少 6 位）"
+                style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+              {authError && <div style={{ fontSize: 11, color: "#DC2626", marginBottom: 6 }}>{authError}</div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={handleLogin} disabled={authLoading} style={{ padding: "6px 12px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>登录</button>
+                <button onClick={handleSignup} disabled={authLoading} style={{ padding: "6px 12px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>注册</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {/* 分类管理：个人分类，默认新用户为空；可在此添加/编辑，或通过添加任务由 AI 智能创建 */}
       <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid " + T.cardBorder }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 8 }}>🏷 分类管理</div>
@@ -1701,25 +1703,6 @@ export default function TaskBrain() {
               <HeaderBtn onClick={function() { if (document.activeElement?.closest?.("input")) { document.activeElement.blur(); requestAnimationFrame(function() { setShowExport(function(p) { return !p; }); }); } else { setShowExport(function(p) { return !p; }); } }} active={showExport} T={T}>⚙️</HeaderBtn>
               <HeaderBtn onClick={function() { setDark(function(p) { return !p; }); }} T={T}>{dark ? "☀️" : "🌙"}</HeaderBtn>
             </div>
-          </div>
-
-          {/* 云端同步：手机端始终可见 */}
-          <div style={{ marginBottom: 20, padding: "12px 14px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, fontSize: 13 }}>
-            <div style={{ fontWeight: 600, color: T.textSec, marginBottom: 6 }}>☁️ 云端同步</div>
-            {!supabase ? (
-              <div style={{ fontSize: 12, color: T.textMuted }}>未配置。请在 Vercel 添加环境变量后重新部署。</div>
-            ) : user ? (
-              <div>
-                <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 8 }}>已登录：{user.email}</div>
-                {dataSource && <div style={{ fontSize: 11, color: dataSource === "cloud" ? "#059669" : T.textMuted, marginBottom: 6 }}>数据来源：{dataSource === "cloud" ? "云端" : "本地"}</div>}
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button type="button" onClick={refreshFromCloud} style={{ padding: "6px 14px", border: "1px solid " + T.accent, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>从云端刷新</button>
-                  <button onClick={handleLogout} style={{ padding: "6px 14px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>退出登录</button>
-                </div>
-              </div>
-            ) : (
-              <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "12px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 与电脑同步</button>
-            )}
           </div>
 
           {settingsJSX}
