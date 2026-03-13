@@ -201,9 +201,13 @@ async function saveToSupabase(supabase, userId, d) {
 
 /* ═══════════════════════════ AI (DeepSeek) ═══════════════════════════ */
 
-// API key: reads from localStorage. Set via the ⚙️ settings panel.
+// API key: 默认使用部署时配置的 VITE_DEEPSEEK_API_KEY（roy@yxdigital.com）；用户可在 ⚙️ 设置中覆盖。
 function getApiKey() {
-  try { return localStorage.getItem("taskbrain-api-key") || ""; } catch (e) { return ""; }
+  try {
+    var fromStorage = localStorage.getItem("taskbrain-api-key") || "";
+    if (fromStorage) return fromStorage;
+    return (import.meta.env.VITE_DEEPSEEK_API_KEY || "").trim();
+  } catch (e) { return ""; }
 }
 function setApiKey(key) {
   try { localStorage.setItem("taskbrain-api-key", key); } catch (e) { /* ignore */ }
@@ -1306,12 +1310,12 @@ export default function TaskBrain() {
         <div style={{ fontSize: 12, fontWeight: 600, color: T.textSec, marginBottom: 4 }}>🔑 DeepSeek API Key</div>
         <input
           type="password"
-          defaultValue={getApiKey()}
+          defaultValue={(() => { try { return localStorage.getItem("taskbrain-api-key") || ""; } catch (e) { return ""; } })()}
           onChange={function(e) { setApiKey(e.target.value); }}
-          placeholder="在此填入 DeepSeek API Key"
+          placeholder={ (import.meta.env.VITE_DEEPSEEK_API_KEY || "").trim() ? "未填写时使用默认 Key（roy@yxdigital.com）" : "在此填入 DeepSeek API Key" }
           style={{ width: "100%", padding: "8px 12px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }}
         />
-        <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>在 <a href="https://platform.deepseek.com/" target="_blank" rel="noopener noreferrer" style={{ color: T.accent }}>DeepSeek 开放平台</a> 创建 API Key 后填入即可使用 AI 功能</div>
+        <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>{(import.meta.env.VITE_DEEPSEEK_API_KEY || "").trim() ? "未填写时使用默认 Key（roy@yxdigital.com）；留空或填入自己的 Key 可覆盖。" : "在 "}<a href="https://platform.deepseek.com/" target="_blank" rel="noopener noreferrer" style={{ color: T.accent }}>DeepSeek 开放平台</a>{(import.meta.env.VITE_DEEPSEEK_API_KEY || "").trim() ? " 可管理 Key。" : " 创建 API Key 后填入即可使用 AI 功能。"}</div>
       </div>
     </div>
   ) : null;
