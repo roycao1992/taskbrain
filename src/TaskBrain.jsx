@@ -29,6 +29,75 @@ function slugForCategory(label) {
   var s = String(label || "").trim().replace(/\s+/g, "_").replace(/[^\w\u4e00-\u9fa5\-_]/g, "");
   return s || "cat_" + Date.now();
 }
+function escapeRegExp(str) {
+  return String(str || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function normalizeCategoryLabel(label) {
+  return String(label || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function findCategoryByLabel(categories, label) {
+  var target = normalizeCategoryLabel(label);
+  if (!target) return null;
+  return (categories || []).find(function(c) {
+    return normalizeCategoryLabel(c.label || c.id) === target || normalizeCategoryLabel(c.id) === target;
+  }) || null;
+}
+function ensureCategoryOnProfile(profile, label, emoji) {
+  var nextProfile = Object.assign({}, DEF_PROFILE, profile || {});
+  var list = Array.isArray(nextProfile.categories) ? nextProfile.categories : [];
+  var cleanLabel = String(label || "").trim();
+  var existing = findCategoryByLabel(list, cleanLabel) || list.find(function(c) { return c.id === slugForCategory(cleanLabel); }) || null;
+  if (existing) return { profile: Object.assign({}, nextProfile, { categories: list }), category: existing, created: false };
+  var newCat = {
+    id: slugForCategory(cleanLabel),
+    label: cleanLabel,
+    emoji: emoji && String(emoji).trim() ? String(emoji).trim().slice(0, 2) : "📌",
+  };
+  return {
+    profile: Object.assign({}, nextProfile, { categories: list.concat([newCat]) }),
+    category: newCat,
+    created: true,
+  };
+}
+function extractExplicitCategory(text, categories) {
+  var raw = String(text || "").trim();
+  if (!raw) return null;
+
+  var existingHit = null;
+  (categories || []).some(function(c) {
+    var label = String(c.label || c.id || "").trim();
+    if (!label) return false;
+    var safe = escapeRegExp(label);
+    var patterns = [
+      new RegExp("[#＃]\\s*" + safe + "(?=\\s|$)", "i"),
+      new RegExp("[【\\[]\\s*" + safe + "\\s*[】\\]]", "i"),
+      new RegExp("(?:分类[：: ]*|分类是|分类为|归类到|归到|属于|放到|放进|记到|记进|算作)\\s*" + safe + "(?:分类)?", "i"),
+    ];
+    return patterns.some(function(re) {
+      if (!re.test(raw)) return false;
+      existingHit = { mode: "existing", category: c, label: label };
+      return true;
+    });
+  });
+  if (existingHit) return existingHit;
+
+  var genericLabels = /^(高|中|低|紧急|优先|优先级|本周|下周|今天|明天|后天|待安排|截止日|周任务)$/;
+  var matchers = [
+    /(?:分类[：: ]*|分类是|分类为|归类到|归到|属于|放到|放进|记到|记进|算作)\s*([A-Za-z0-9\u4e00-\u9fa5][A-Za-z0-9\u4e00-\u9fa5_\- ]{0,19})/i,
+    /^[#＃]\s*([A-Za-z0-9\u4e00-\u9fa5][A-Za-z0-9\u4e00-\u9fa5_\- ]{0,19})(?=\s|$)/i,
+    /^[【\[]\s*([^\]】]{1,20})\s*[】\]]/i,
+  ];
+  for (var i = 0; i < matchers.length; i++) {
+    var match = raw.match(matchers[i]);
+    if (!match || !match[1]) continue;
+    var label = String(match[1]).trim().replace(/分类$/i, "").trim();
+    if (!label || genericLabels.test(label)) continue;
+    var existing = findCategoryByLabel(categories || [], label);
+    if (existing) return { mode: "existing", category: existing, label: existing.label || existing.id };
+    return { mode: "new", label: label };
+  }
+  return null;
+}
 
 const PRIORITIES = [
   { id: "urgent", label: "紧急", color: "#DC2626", weight: 4 },
@@ -143,10 +212,127 @@ function fmtDateWithWeekday(ds) {
   if (!ds) return "";
   return fmtDate(ds) + " " + getWeekday(ds);
 }
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function formatYmd(date) {
+  return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+}
+function buildValidDate(year, month, day) {
+  var y = Number(year);
+  var m = Number(month);
+  var d = Number(day);
+  if (!y || !m || !d) return null;
+  var dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+var WEEKDAY_NUM = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 0, "天": 0, "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6 };
+function resolveWeekdayDate(baseDate, weekOffset, weekdayChar) {
+  var weekday = WEEKDAY_NUM[weekdayChar];
+  if (weekday === undefined) return null;
+  var mon = getMondayOfWeek(baseDate);
+  var target = new Date(mon);
+  target.setDate(mon.getDate() + weekOffset * 7 + (weekday === 0 ? 6 : weekday - 1));
+  return target;
+}
+function normalizeDateCandidate(value, baseDate) {
+  var raw = String(value || "").trim();
+  if (!raw || /^null$/i.test(raw) || /^undefined$/i.test(raw)) return null;
+  var today = baseDate instanceof Date ? new Date(baseDate) : new Date();
+  today.setHours(0, 0, 0, 0);
+  var text = raw.replace(/\s+/g, " ");
+
+  if (/今天/.test(text)) return formatYmd(today);
+  if (/明天/.test(text)) {
+    var tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return formatYmd(tomorrow);
+  }
+  if (/后天/.test(text)) {
+    var afterTomorrow = new Date(today);
+    afterTomorrow.setDate(today.getDate() + 2);
+    return formatYmd(afterTomorrow);
+  }
+
+  var weekdayMatch = text.match(/(本周|这周|下周|下下周)?\s*(周|星期)([一二三四五六日天0-6])/);
+  if (weekdayMatch) {
+    var weekWord = weekdayMatch[1] || "";
+    var weekOffset = weekWord === "下周" ? 1 : weekWord === "下下周" ? 2 : 0;
+    var weekdayDate = resolveWeekdayDate(today, weekOffset, weekdayMatch[3]);
+    if (weekdayDate) return formatYmd(weekdayDate);
+  }
+
+  var ymdMatch = text.match(/(\d{4})\s*[年\/\-.]\s*(\d{1,2})\s*[月\/\-.]\s*(\d{1,2})(?:\s*[日号])?/);
+  if (ymdMatch) {
+    var fullDate = buildValidDate(ymdMatch[1], ymdMatch[2], ymdMatch[3]);
+    return fullDate ? formatYmd(fullDate) : null;
+  }
+
+  var mdMatch = text.match(/(\d{1,2})\s*[月\/\-.]\s*(\d{1,2})(?:\s*[日号])?/);
+  if (mdMatch) {
+    var inferred = buildValidDate(today.getFullYear(), mdMatch[1], mdMatch[2]);
+    return inferred ? formatYmd(inferred) : null;
+  }
+
+  return null;
+}
+function normalizeWeekCandidate(value, text, currentWeekKey) {
+  var raw = String(value || "").trim();
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  var normalized = normalizeDateCandidate(raw, getWeekRange(currentWeekKey).mon);
+  if (normalized) return getWeekKey(new Date(normalized));
+  var source = String(text || "");
+  if (/下下周/.test(source)) return nextWeekKey(nextWeekKey(currentWeekKey));
+  if (/下周/.test(source)) return nextWeekKey(currentWeekKey);
+  if (/(本周|这周)/.test(source)) return currentWeekKey;
+  return null;
+}
+function parseTaskAIResponse(raw) {
+  if (!raw) return null;
+  var text = String(raw).replace(/```json|```/gi, "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) { /* ignore */ }
+  var start = text.indexOf("{");
+  var end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+function inferPriorityFromText(text) {
+  var raw = String(text || "");
+  if (/(紧急|加急|立即|马上|尽快|urgent|asap)/i.test(raw)) return "urgent";
+  if (/(高优|高优先级|优先级高|重要|high)/i.test(raw)) return "high";
+  if (/(低优|低优先级|不急|low)/i.test(raw)) return "low";
+  if (/(中优|中优先级|一般|medium)/i.test(raw)) return "medium";
+  return null;
+}
+function hasDeadlineCue(text) {
+  var raw = String(text || "");
+  return /(截止|截至|之前|以前|前完成|前提交|前处理|前搞定|before|due)/i.test(raw)
+    || /(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}|\d{1,2}月\d{1,2}[日号]?|今天|明天|后天)/.test(raw);
+}
 function fmtNoteTime(ts) {
   if (!ts) return "";
   var d = new Date(ts);
   return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+function getTaskPlacementLabel(task, CW) {
+  if (!task) return "";
+  if (task.type === "deadline" && task.deadline) return "截止 " + fmtDateWithWeekday(task.deadline);
+  if (task.type === "week" && task.week) return getWeekLabel(task.week, CW);
+  return "待安排";
+}
+function getRevealView(currentView, task) {
+  if (!task) return currentView;
+  if (currentView === "deadline" && task.type !== "deadline") return "week";
+  if (currentView === "category" && !task.category) return "week";
+  return currentView;
 }
 
 function dlWeek(ds) {
@@ -157,6 +343,56 @@ function dlWeek(ds) {
 
 var DEF_PROFILE = { company: "", personal: "", invest: "", family: "", categories: [] };
 var DEF_STATUS = "";
+
+function normalizeProfileShape(profile) {
+  if (!profile || typeof profile !== "object") return Object.assign({}, DEF_PROFILE);
+  return Object.assign({}, DEF_PROFILE, profile, {
+    categories: Array.isArray(profile.categories) ? profile.categories : [],
+  });
+}
+function normalizeSnapshot(data) {
+  return {
+    tasks: Array.isArray(data && data.tasks) ? data.tasks : [],
+    profile: normalizeProfileShape(data && data.profile),
+    status: data && data.status !== undefined ? data.status : "",
+    dark: !!(data && data.dark),
+    notes: Array.isArray(data && data.notes) ? data.notes : [],
+    updatedAt: (data && (data.updatedAt || data.updated_at)) || null,
+  };
+}
+function snapshotToPayload(snapshot) {
+  var s = normalizeSnapshot(snapshot);
+  return {
+    tasks: s.tasks,
+    profile: s.profile,
+    status: s.status,
+    dark: s.dark,
+    notes: s.notes,
+  };
+}
+function sortedStringify(obj) {
+  if (obj === undefined) return undefined;
+  if (Array.isArray(obj)) return "[" + obj.map(sortedStringify).join(",") + "]";
+  if (obj !== null && typeof obj === "object") {
+    var keys = Object.keys(obj).sort().filter(function(k) { return obj[k] !== undefined; });
+    return "{" + keys.map(function(k) { return JSON.stringify(k) + ":" + sortedStringify(obj[k]); }).join(",") + "}";
+  }
+  return JSON.stringify(obj);
+}
+function serializePayload(payload) {
+  return sortedStringify(snapshotToPayload(payload));
+}
+function hasSnapshotContent(snapshot) {
+  var s = normalizeSnapshot(snapshot);
+  return s.tasks.length > 0 || s.notes.length > 0 || Object.keys(s.profile || {}).some(function(k) {
+    if (k === "categories") return (s.profile.categories || []).length > 0;
+    return !!s.profile[k];
+  }) || !!s.status;
+}
+function toTimeMs(value) {
+  var ts = Date.parse(value || "");
+  return Number.isFinite(ts) ? ts : 0;
+}
 
 /* ═══════════════════════════ STORAGE ═══════════════════════════ */
 
@@ -180,23 +416,33 @@ function saveLocal(d) {
 
 async function loadFromSupabase(supabase, userId) {
   if (!supabase || !userId) return null;
-  var r = await supabase.from("user_data").select("tasks, profile, status, dark, notes").eq("id", userId).maybeSingle();
+  var r = await supabase.from("user_data").select("tasks, profile, status, dark, notes, updated_at").eq("id", userId).maybeSingle();
   if (r.error) return null;
   if (!r.data) return null;
-  return { tasks: r.data.tasks || [], profile: r.data.profile || {}, status: r.data.status || "", dark: !!r.data.dark, notes: Array.isArray(r.data.notes) ? r.data.notes : [] };
+  return normalizeSnapshot({
+    tasks: r.data.tasks,
+    profile: r.data.profile,
+    status: r.data.status,
+    dark: r.data.dark,
+    notes: r.data.notes,
+    updated_at: r.data.updated_at,
+  });
 }
 
-async function saveToSupabase(supabase, userId, d) {
-  if (!supabase || !userId) return;
-  await supabase.from("user_data").upsert({
+async function saveToSupabase(supabase, userId, d, updatedAt) {
+  if (!supabase || !userId) return { error: null, updatedAt: null };
+  var payload = snapshotToPayload(d);
+  var updatedAt = updatedAt || new Date().toISOString();
+  var r = await supabase.from("user_data").upsert({
     id: userId,
-    tasks: d.tasks || [],
-    profile: d.profile || {},
-    status: d.status ?? "",
-    dark: !!d.dark,
-    notes: Array.isArray(d.notes) ? d.notes : [],
-    updated_at: new Date().toISOString(),
+    tasks: payload.tasks,
+    profile: payload.profile,
+    status: payload.status,
+    dark: payload.dark,
+    notes: payload.notes,
+    updated_at: updatedAt,
   }, { onConflict: "id" });
+  return { error: r.error || null, updatedAt: r.error ? null : updatedAt };
 }
 
 /* ═══════════════════════════ AI (DeepSeek) ═══════════════════════════ */
@@ -319,7 +565,7 @@ function Toast(props) {
   useEffect(function() {
     var t = setTimeout(props.onDone, 3500);
     return function() { clearTimeout(t); };
-  }, [props.onDone]);
+  }, []);
 
   return (
     <div style={{
@@ -451,6 +697,8 @@ function TaskItem(props) {
     else if (dlD <= 3) borderColor = "#FDBA74";
   }
 
+  var pending = props.classifyingId === task.id;
+
   var catList = props.categories || [];
   var catObj = catList.find(function(x) { return x.id === task.category; });
   var catColor = CC[task.category] || getCatColors(catList, task.category, props.dark);
@@ -486,7 +734,7 @@ function TaskItem(props) {
   }
 
   return (
-    <div style={{
+    <div id={"task-" + task.id} style={{
       padding: "12px 16px",
       background: task.done ? T.cardDone : T.card,
       borderRadius: 10,
@@ -494,6 +742,15 @@ function TaskItem(props) {
       opacity: task.done ? 0.5 : 1,
     }}>
       {/* Main row */}
+      {pending ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 32 }}>
+          <div style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: "2px solid " + T.inputBorder, background: "transparent" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 500, color: T.textMuted, lineHeight: 1.5 }}>{task.text}</div>
+            <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>⏳ AI 分析中，请稍候...</div>
+          </div>
+        </div>
+      ) : (
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
         <button onClick={function() { props.onToggle(task.id); }} style={{
           width: 20, height: 20, borderRadius: 6, flexShrink: 0, marginTop: 2,
@@ -529,6 +786,11 @@ function TaskItem(props) {
             {task.type === "deadline" && task.deadline && (
               <span style={{ fontSize: 11, fontWeight: 700, color: dlD < 0 ? "#DC2626" : dlD <= 3 ? "#DC2626" : dlD <= 7 ? "#CA8A04" : T.textSec }}>
                 {"🗓 " + fmtDateWithWeekday(task.deadline) + " · " + (dlD < 0 ? "已过期" + (-dlD) + "天" : dlD === 0 ? "今天截止" : dlD === 1 ? "明天截止" : "还剩" + dlD + "天")}
+              </span>
+            )}
+            {task.type === "deadline" && !task.deadline && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#CA8A04" }}>
+                🗓 待补截止日
               </span>
             )}
             {task.type === "week" && task.week && (
@@ -570,6 +832,7 @@ function TaskItem(props) {
           }
         </div>
       </div>
+      )}
 
       {/* Edit panel */}
       {isEdit && (
@@ -665,6 +928,7 @@ export default function TaskBrain() {
   var [view, setView] = useState("week");
   var [input, setInput] = useState("");
   var [classifying, setClassifying] = useState(false);
+  var [classifyingId, setClassifyingId] = useState(null);
   var [ai, setAi] = useState(null);
   var [dark, setDark] = useState(false);
   var [addDL, setAddDL] = useState("");
@@ -700,6 +964,14 @@ export default function TaskBrain() {
   var saveFlushRef = useRef(null);
   var profileOrStatusFocusedRef = useRef(false);
   var userIdRef = useRef(null);
+  var syncedPayloadRef = useRef("");
+  var currentPayloadRef = useRef("");
+  var lastCloudUpdatedAtRef = useRef("");
+  var saveSeqRef = useRef(0);
+  var flushOnNextSaveRef = useRef(false);
+  var ownUpdatedAtRef = useRef("");
+  var recentlyDeletedRef = useRef(new Set());
+  var applySnapshotRef = useRef(null);
   var supabase = getSupabase();
 
   var CW = getCW();
@@ -714,6 +986,80 @@ export default function TaskBrain() {
   var nw = nextWeekKey(CW);
   var windowWidth = useWindowWidth();
   var isDesktop = windowWidth >= 1024;
+
+  var applySnapshotToState = useCallback(function(data, options) {
+    if (!data) return false;
+    var snapshot = normalizeSnapshot(data);
+    // Filter out recently deleted tasks to prevent Realtime echo from restoring them
+    if (recentlyDeletedRef.current.size > 0) {
+      snapshot = Object.assign({}, snapshot, {
+        tasks: snapshot.tasks.filter(function(t) { return !recentlyDeletedRef.current.has(t.id); })
+      });
+    }
+    var shouldApplyProfile = !profileOrStatusFocusedRef.current || !!(options && options.forceProfile);
+    var nextProfile = shouldApplyProfile ? snapshot.profile : normalizeProfileShape(profile);
+    var nextStatus = shouldApplyProfile ? snapshot.status : status;
+    var nextPayload = {
+      tasks: snapshot.tasks,
+      profile: nextProfile,
+      status: nextStatus,
+      dark: snapshot.dark,
+      notes: snapshot.notes,
+    };
+    var serialized = serializePayload(nextPayload);
+
+    if (!(options && options.force)) {
+      if (serialized && serialized === currentPayloadRef.current) {
+        syncedPayloadRef.current = serialized;
+        if (snapshot.updatedAt) lastCloudUpdatedAtRef.current = snapshot.updatedAt;
+        return false;
+      }
+      if (syncedPayloadRef.current && currentPayloadRef.current && syncedPayloadRef.current !== currentPayloadRef.current) {
+        return false;
+      }
+    }
+
+    syncedPayloadRef.current = serialized;
+    currentPayloadRef.current = serialized;
+    if (snapshot.updatedAt) lastCloudUpdatedAtRef.current = snapshot.updatedAt;
+
+    setTasks(snapshot.tasks);
+    if (shouldApplyProfile) {
+      setProfile(nextProfile);
+      setStatus(nextStatus);
+    }
+    setDark(snapshot.dark);
+    setNotes(snapshot.notes);
+    if (options && options.source) setDataSource(options.source);
+    return true;
+  }, [profile, status]);
+  applySnapshotRef.current = applySnapshotToState;
+
+  var persistCloudPayload = useCallback(async function(payload, serialized) {
+    if (!supabase || !user?.id || !serialized || serialized === syncedPayloadRef.current) return;
+    saveSeqRef.current += 1;
+    var seq = saveSeqRef.current;
+    var updatedAt = new Date().toISOString();
+    if (updatedAt > ownUpdatedAtRef.current) ownUpdatedAtRef.current = updatedAt;
+    var result = await saveToSupabase(supabase, user.id, payload, updatedAt);
+    if (seq !== saveSeqRef.current) return;
+    if (result && result.error) {
+      console.error("[TaskBrain] Cloud save failed:", result.error);
+      return;
+    }
+    if (serialized === currentPayloadRef.current) {
+      syncedPayloadRef.current = serialized;
+      setDataSource("cloud");
+    }
+    if (result && result.updatedAt) {
+      lastCloudUpdatedAtRef.current = result.updatedAt;
+      saveLocal(Object.assign({}, snapshotToPayload(payload), { updatedAt: result.updatedAt }));
+    }
+  }, [supabase, user?.id]);
+
+  function showToast(message) {
+    setToast({ id: Date.now().toString() + "_" + Math.random().toString(16).slice(2), message: message });
+  }
 
   /* ── Auth 状态：仅当 user id 变化时 setUser，避免 onAuthStateChange 频繁触发导致重渲染风暴 ── */
   useEffect(function() {
@@ -747,99 +1093,95 @@ export default function TaskBrain() {
     var cancelled = false;
     (async function() {
       var local = loadLocal();
+      var localSnapshot = normalizeSnapshot(local);
+      var localHasData = hasSnapshotContent(localSnapshot);
       var uid = user?.id ?? null;
-      function setProfileWithCategories(p) {
-        if (!p || typeof p !== "object") p = {};
-        if (!Array.isArray(p.categories)) p = Object.assign({}, p, { categories: [] });
-        setProfile(p);
-      }
       if (supabase && uid) {
         var remote = await loadFromSupabase(supabase, uid);
         if (cancelled) return;
         if (remote) {
-          setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
-          setProfileWithCategories(remote.profile);
-          setStatus(remote.status ?? "");
-          setDark(!!remote.dark);
-          setNotes(Array.isArray(remote.notes) ? remote.notes : []);
-          if (!cancelled) setDataSource("cloud");
-        } else if (local && (local.tasks?.length > 0 || Object.keys(local.profile || {}).length > 0 || (local.notes && local.notes.length > 0))) {
-          if (local.tasks?.length) setTasks(local.tasks);
-          setProfileWithCategories(local.profile);
-          if (local.status !== undefined) setStatus(local.status);
-          if (local.dark !== undefined) setDark(local.dark);
-          setNotes(Array.isArray(local.notes) ? local.notes : []);
-          if (!cancelled) setDataSource("local");
-          await saveToSupabase(supabase, uid, { tasks: local.tasks, profile: Object.assign({}, local.profile, { categories: local.profile?.categories || [] }), status: local.status, dark: local.dark, notes: Array.isArray(local.notes) ? local.notes : [] });
+          var remoteMs = toTimeMs(remote.updatedAt);
+          var localMs = toTimeMs(localSnapshot.updatedAt);
+          if (localHasData && localMs && (!remoteMs || localMs > remoteMs + 1000)) {
+            applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+            var resync = await saveToSupabase(supabase, uid, localSnapshot);
+            if (resync && !resync.error) {
+              syncedPayloadRef.current = serializePayload(localSnapshot);
+              currentPayloadRef.current = syncedPayloadRef.current;
+              if (resync.updatedAt) lastCloudUpdatedAtRef.current = resync.updatedAt;
+            }
+          } else {
+          applySnapshotToState(remote, { source: "cloud", force: true, forceProfile: true });
+          }
+        } else if (localHasData) {
+          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+          var upload = await saveToSupabase(supabase, uid, localSnapshot);
+          if (upload && !upload.error) {
+            syncedPayloadRef.current = serializePayload(localSnapshot);
+            currentPayloadRef.current = syncedPayloadRef.current;
+            if (upload.updatedAt) lastCloudUpdatedAtRef.current = upload.updatedAt;
+          }
         } else {
-          if (local?.tasks?.length) setTasks(local.tasks);
-          setProfileWithCategories(local?.profile);
-          if (local?.status !== undefined) setStatus(local.status);
-          if (local?.dark !== undefined) setDark(local.dark);
-          setNotes(Array.isArray(local?.notes) ? local.notes : []);
-          if (!cancelled) setDataSource("local");
+          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
         }
       } else {
         if (cancelled) return;
-        if (local) {
-          if (local.tasks?.length) setTasks(local.tasks);
-          setProfileWithCategories(local.profile);
-          if (local.status !== undefined) setStatus(local.status);
-          if (local.dark !== undefined) setDark(local.dark);
-          setNotes(Array.isArray(local.notes) ? local.notes : []);
+        if (localHasData) {
+          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
         } else {
-          setTasks([]);
-          setProfileWithCategories(DEF_PROFILE);
-          setNotes([]);
+          applySnapshotToState(normalizeSnapshot(null), { source: "local", force: true, forceProfile: true });
         }
-        if (!cancelled) setDataSource("local");
       }
       if (!cancelled) setLoaded(true);
     })();
     return function() { cancelled = true; };
-  }, [authReady, supabase, user?.id]);
+  }, [authReady, supabase, user?.id, applySnapshotToState]);
 
   /* ── 保存：始终写本地；已登录则防抖写 Supabase；blur 时通过 saveFlushRef 立即写入 ── */
   useEffect(function() {
     if (!loaded) return;
-    var payload = { tasks: tasks, profile: profile, status: status, dark: dark, notes: notes };
-    saveLocal(payload);
+    var payload = snapshotToPayload({ tasks: tasks, profile: profile, status: status, dark: dark, notes: notes });
+    var serialized = serializePayload(payload);
+    var localUpdatedAt = serialized === syncedPayloadRef.current && lastCloudUpdatedAtRef.current
+      ? lastCloudUpdatedAtRef.current
+      : new Date().toISOString();
+    currentPayloadRef.current = serialized;
+    saveLocal(Object.assign({}, payload, { updatedAt: localUpdatedAt }));
     saveFlushRef.current = function() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
-      if (supabase && user) saveToSupabase(supabase, user.id, payload);
+      if (supabase && user && serialized !== syncedPayloadRef.current) persistCloudPayload(payload, serialized);
     };
-    if (supabase && user) {
+    if (supabase && user && serialized !== syncedPayloadRef.current) {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = setTimeout(function() {
-        saveToSupabase(supabase, user.id, payload);
-        saveTimeoutRef.current = null;
-      }, 800);
+      if (flushOnNextSaveRef.current) {
+        flushOnNextSaveRef.current = false;
+        persistCloudPayload(payload, serialized);
+      } else {
+        saveTimeoutRef.current = setTimeout(function() {
+          persistCloudPayload(payload, serialized);
+          saveTimeoutRef.current = null;
+        }, 800);
+      }
     }
     return function() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [tasks, profile, status, dark, notes, loaded, supabase, user?.id]);
+  }, [tasks, profile, status, dark, notes, loaded, supabase, user?.id, persistCloudPayload]);
 
   /* ── Realtime：订阅当前用户的 user_data 变更，A 端修改后 B 端自动更新 ── */
   useEffect(function() {
     if (!supabase || !user?.id || !loaded) return;
     var uid = user.id;
-    function applyRemote(row) {
-      if (!row) return;
-      setTasks(Array.isArray(row.tasks) ? row.tasks : []);
-      if (!profileOrStatusFocusedRef.current) {
-        var p = row.profile;
-        if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
-        setProfile(p || {});
-        setStatus(row.status ?? "");
-      }
-      setDark(!!row.dark);
-      setNotes(Array.isArray(row.notes) ? row.notes : []);
-    }
     function onRealtimePayload(payload) {
       if (payload && payload.new) {
-        applyRemote(payload.new);
+        var ua = payload.new.updated_at || "";
+        if (ua && ownUpdatedAtRef.current && ua <= ownUpdatedAtRef.current) {
+          // Own echo or stale event from before our latest save — suppress
+          syncedPayloadRef.current = currentPayloadRef.current;
+          return;
+        }
+        applySnapshotRef.current(payload.new, { source: "cloud" });
         if (typeof console !== "undefined" && console.debug) console.debug("[TaskBrain] 已从其他端同步", payload.event);
       }
     }
@@ -858,21 +1200,9 @@ export default function TaskBrain() {
   useEffect(function() {
     if (!supabase || !user?.id || !loaded) return;
     var uid = user.id;
-    function applyRemote(remote) {
-      if (!remote) return;
-      setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
-      if (!profileOrStatusFocusedRef.current) {
-        var p = remote.profile;
-        if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
-        setProfile(p || {});
-        setStatus(remote.status ?? "");
-      }
-      setDark(!!remote.dark);
-      setNotes(Array.isArray(remote.notes) ? remote.notes : []);
-    }
     function onVisible() {
       if (document.visibilityState !== "visible") return;
-      loadFromSupabase(supabase, uid).then(applyRemote);
+      loadFromSupabase(supabase, uid).then(function(remote) { applySnapshotRef.current(remote, { source: "cloud" }); });
     }
     document.addEventListener("visibilitychange", onVisible);
     return function() { document.removeEventListener("visibilitychange", onVisible); };
@@ -881,16 +1211,9 @@ export default function TaskBrain() {
   var refreshFromCloud = useCallback(function() {
     if (!supabase || !user?.id) return;
     loadFromSupabase(supabase, user.id).then(function(remote) {
-      if (!remote) { setToast("拉取失败，请稍后重试"); return; }
-      setTasks(Array.isArray(remote.tasks) ? remote.tasks : []);
-      var p = remote.profile;
-      if (p && typeof p === "object" && !Array.isArray(p.categories)) p = Object.assign({}, p, { categories: p.categories || [] });
-      setProfile(p || {});
-      setStatus(remote.status ?? "");
-      setDark(!!remote.dark);
-      setNotes(Array.isArray(remote.notes) ? remote.notes : []);
-      setDataSource("cloud");
-      setToast("已从云端拉取最新");
+      if (!remote) { showToast("拉取失败，请稍后重试"); return; }
+      applySnapshotRef.current(remote, { source: "cloud", force: true, forceProfile: true });
+      showToast("已从云端拉取最新");
     });
   }, [supabase, user?.id]);
 
@@ -901,85 +1224,109 @@ export default function TaskBrain() {
     var today = new Date().toISOString().split("T")[0];
     var cwMon = getWeekRange(CW).mon;
     var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
-    var defaultCat = categories.length > 0 ? categories[0].id : "";
+    var explicitCategory = extractExplicitCategory(text, categories);
+    var explicitCatObj = explicitCategory && explicitCategory.mode === "existing" ? explicitCategory.category : null;
+    if (explicitCategory && explicitCategory.mode === "new") {
+      var explicitCreated = ensureCategoryOnProfile(profile, explicitCategory.label, "📌");
+      if (explicitCreated.created) setProfile(explicitCreated.profile);
+      explicitCatObj = explicitCreated.category;
+    }
+    var defaultCat = explicitCatObj ? explicitCatObj.id : (categories.length > 0 ? categories[0].id : "");
 
     var newTask = { id: id, text: text, detail: "", category: defaultCat, priority: "medium", type: hasDL ? "deadline" : "week", week: null, deadline: hasDL ? addDL : null, done: false, subtasks: [] };
+    flushOnNextSaveRef.current = true;
     setTasks(function(p) { return [newTask].concat(p); });
-    setInput(""); setAddDL(""); setClassifying(true);
+    setInput(""); setAddDL(""); setClassifying(true); setClassifyingId(id);
+    showToast("已添加任务，正在整理：" + text);
 
-    var userMsg = "任务描述：「" + text + "」\n今日日期：" + today + "，本周周一：" + cwMonStr + (hasDL ? "；用户已选截止日：" + addDL : "") + "\n请提炼并分配。";
+    var explicitHint = explicitCategory
+      ? "\n用户已明确指定分类：" + (explicitCatObj ? ((explicitCatObj.label || explicitCatObj.id) + "（必须优先使用该分类）") : (explicitCategory.label + "（若不存在请创建该分类）"))
+      : "";
+    var userMsg = "任务描述：「" + text + "」\n今日日期：" + today + "，本周周一：" + cwMonStr + (hasDL ? "；用户已选截止日：" + addDL : "") + explicitHint + "\n请提炼并分配。";
     var r = await callAI(buildClsSys(profile), [{ role: "user", content: userMsg }]);
-    if (r) {
-      try {
-        var raw = r.replace(/```json|```/g, "").trim();
-        var parsed = JSON.parse(raw);
-        var refined = (parsed.refinedText && String(parsed.refinedText).trim()) || text;
-        var dl = hasDL ? addDL : (parsed.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.deadline)) ? parsed.deadline : null);
-        var wk = (parsed.week && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.week)) ? parsed.week : null) || null;
-        var typ = hasDL ? "deadline" : (parsed.type === "deadline" || dl ? "deadline" : "week");
-        if (typ === "deadline") wk = null;
-        if (typ === "week" && !wk) wk = null;
+    var parsed = parseTaskAIResponse(r);
+    var baseNow = new Date();
+    var refined = (parsed && parsed.refinedText && String(parsed.refinedText).trim()) || text;
+    var rawDeadline = parsed ? parsed.deadline : null;
+    var aiWantsDeadline = parsed && (parsed.type === "deadline" || !!(rawDeadline && String(rawDeadline).trim()));
+    var localDeadline = normalizeDateCandidate(text, baseNow);
+    var dl = hasDL ? addDL : (normalizeDateCandidate(rawDeadline, baseNow) || ((aiWantsDeadline || hasDeadlineCue(text)) ? localDeadline : null));
+    var wk = normalizeWeekCandidate(parsed ? parsed.week : null, text, CW) || null;
+    var typ = hasDL || dl ? "deadline" : "week";
+    if (typ === "deadline") wk = null;
+    if (typ === "week" && !wk) wk = null;
 
-        var resolvedCatId = defaultCat;
-        if (parsed.newCategory && String(parsed.newCategory).trim()) {
-          var newLabel = String(parsed.newCategory).trim();
-          var newId = slugForCategory(newLabel);
-          var existing = (profile.categories || []).find(function(c) { return c.id === newId || c.label === newLabel; });
-          if (!existing) {
-            var newCat = { id: newId, label: newLabel, emoji: parsed.newEmoji && String(parsed.newEmoji).trim() ? String(parsed.newEmoji).trim().slice(0, 2) : "📌" };
-            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([newCat]) }); });
-            resolvedCatId = newId;
-          } else {
-            resolvedCatId = existing.id;
-          }
-        } else if (parsed.category && (profile.categories || []).some(function(c) { return c.id === parsed.category; })) {
-          resolvedCatId = parsed.category;
-        }
-        var cat = (profile.categories || []).find(function(c) { return c.id === resolvedCatId; }) || (resolvedCatId ? { id: resolvedCatId, label: resolvedCatId, emoji: "📌" } : null);
-        var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
-        var detailStr = (parsed.detail && String(parsed.detail).trim()) || "";
-        setTasks(function(prev) {
-          return prev.map(function(t) {
-            if (t.id !== id) return t;
-            return Object.assign({}, t, {
-              text: refined,
-              detail: detailStr,
-              category: resolvedCatId,
-              priority: (pri && pri.id) || t.priority,
-              type: typ,
-              deadline: typ === "deadline" ? dl : null,
-              week: typ === "week" ? wk : null,
-            });
-          });
-        });
-        var msg = (refined !== text ? "已提炼为：「" + refined + "」" + (detailStr ? "（含备注）" : "") + " · " : "") + (cat ? (cat.emoji || "📌") + " " + (cat.label || resolvedCatId) : "") + (pri ? " · " + pri.label : "") + (parsed.reason ? " — " + parsed.reason : "");
-        setToast(msg);
-      } catch (e) { /* parse error */ }
+    var resolvedCat = explicitCatObj;
+    if (!resolvedCat && parsed && parsed.newCategory && String(parsed.newCategory).trim()) {
+      var aiCreated = ensureCategoryOnProfile(profile, String(parsed.newCategory).trim(), parsed.newEmoji);
+      if (aiCreated.created) setProfile(aiCreated.profile);
+      resolvedCat = aiCreated.category;
+    } else if (!resolvedCat && parsed && parsed.category) {
+      resolvedCat = (profile.categories || []).find(function(c) { return c.id === parsed.category; }) || findCategoryByLabel(profile.categories || [], parsed.category);
     }
-    setClassifying(false);
+    var resolvedCatId = resolvedCat ? resolvedCat.id : defaultCat;
+    var cat = resolvedCat || (profile.categories || []).find(function(c) { return c.id === resolvedCatId; }) || (resolvedCatId ? { id: resolvedCatId, label: resolvedCatId, emoji: "📌" } : null);
+    var priorityId = (parsed && parsed.priority) || inferPriorityFromText(text) || newTask.priority;
+    var pri = PRIORITIES.find(function(x) { return x.id === priorityId; });
+    var detailStr = (parsed && parsed.detail && String(parsed.detail).trim()) || "";
+    var finalTask = {
+      id: id,
+      text: refined,
+      detail: detailStr,
+      category: resolvedCatId,
+      priority: (pri && pri.id) || newTask.priority,
+      type: typ,
+      deadline: typ === "deadline" ? dl : null,
+      week: typ === "week" ? wk : null,
+      done: false,
+      subtasks: [],
+    };
+    flushOnNextSaveRef.current = true;
+    setTasks(function(prev) {
+      return prev.map(function(t) {
+        return t.id === id ? finalTask : t;
+      });
+    });
+    var msg = (refined !== text ? "已提炼为：「" + refined + "」" + (detailStr ? "（含备注）" : "") + " · " : "")
+      + (cat ? (cat.emoji || "📌") + " " + (cat.label || resolvedCatId) : "")
+      + (pri ? " · " + pri.label : "")
+      + " · 已放到" + getTaskPlacementLabel(finalTask, CW)
+      + (parsed && parsed.reason ? " — " + parsed.reason : "")
+      + (!parsed && r ? " · AI结果解析失败，已按本地规则整理" : !r ? " · AI暂不可用，已按本地规则整理" : "");
+    showToast(msg);
+    setClassifying(false); setClassifyingId(null);
   };
 
-  function toggle(id) { setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, { done: !t.done, doneAt: !t.done ? Date.now() : null }) : t; }); }); }
-  function remove(id) { setTasks(function(p) { return p.filter(function(t) { return t.id !== id; }); }); }
-  function update(id, u) { setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, u) : t; }); }); }
-  function moveToWeek(id, wk) { setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, { week: wk }) : t; }); }); }
-  function addSub(tid, text) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).concat([{ id: tid + "_" + Date.now(), text: text, done: false }]) }) : t; }); }); }
-  function toggleSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).map(function(s) { return s.id === sid ? Object.assign({}, s, { done: !s.done }) : s; }) }) : t; }); }); }
-  function removeSub(tid, sid) { setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).filter(function(s) { return s.id !== sid; }) }) : t; }); }); }
+  function toggle(id) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, { done: !t.done, doneAt: !t.done ? Date.now() : null }) : t; }); }); }
+  function remove(id) {
+    recentlyDeletedRef.current.add(id);
+    setTimeout(function() { recentlyDeletedRef.current.delete(id); }, 10000);
+    flushOnNextSaveRef.current = true;
+    setTasks(function(p) { return p.filter(function(t) { return t.id !== id; }); });
+    showToast("已删除任务");
+  }
+  function update(id, u) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, u) : t; }); }); }
+  function moveToWeek(id, wk) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === id ? Object.assign({}, t, { week: wk }) : t; }); }); }
+  function addSub(tid, text) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).concat([{ id: tid + "_" + Date.now(), text: text, done: false }]) }) : t; }); }); }
+  function toggleSub(tid, sid) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).map(function(s) { return s.id === sid ? Object.assign({}, s, { done: !s.done }) : s; }) }) : t; }); }); }
+  function removeSub(tid, sid) { flushOnNextSaveRef.current = true; setTasks(function(p) { return p.map(function(t) { return t.id === tid ? Object.assign({}, t, { subtasks: (t.subtasks || []).filter(function(s) { return s.id !== sid; }) }) : t; }); }); }
   function addNote(content) {
     var c = String(content || "").trim();
     if (!c) return;
     var now = Date.now();
+    flushOnNextSaveRef.current = true;
     setNotes(function(p) { return [{ id: now.toString(), content: c, createdAt: now, updatedAt: now }].concat(p); });
     setNoteNewContent(""); setNoteNewExpanded(false);
   }
   function updateNote(id, content) {
     var c = String(content || "").trim();
+    flushOnNextSaveRef.current = true;
     setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { content: c, updatedAt: Date.now() }) : n; }); });
     setNoteEditingId(null); setNoteEditContent("");
   }
   function removeNote(id) {
     if (!window.confirm("确定删除这条随笔？")) return;
+    flushOnNextSaveRef.current = true;
     setNotes(function(p) { return p.filter(function(n) { return n.id !== id; }); });
     if (noteEditingId === id) { setNoteEditingId(null); setNoteEditContent(""); }
   }
@@ -990,44 +1337,46 @@ export default function TaskBrain() {
     var today = new Date().toISOString().split("T")[0];
     var cwMon = getWeekRange(CW).mon;
     var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
-    var userMsg = "把下面这段随笔整理成一个任务，今日日期：" + today + "，本周周一：" + cwMonStr + "\n\n" + (n.content || "").trim();
-    var r = await callAI(buildClsSys(profile), [{ role: "user", content: userMsg }]);
-    if (r) {
-      try {
-        var raw = r.replace(/```json|```/g, "").trim();
-        var parsed = JSON.parse(raw);
-        var refined = (parsed.refinedText && String(parsed.refinedText).trim()) || (n.content || "").trim().slice(0, 200);
-        var dl = parsed.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.deadline)) ? parsed.deadline : null;
-        var wk = (parsed.week && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.week)) ? parsed.week : null) || null;
-        var typ = parsed.type === "deadline" || dl ? "deadline" : "week";
-        if (typ === "deadline") wk = null;
-        if (typ === "week" && !wk) wk = null;
-        var defaultCat = categories.length > 0 ? categories[0].id : "";
-        var resolvedCatId = defaultCat;
-        if (parsed.newCategory && String(parsed.newCategory).trim()) {
-          var newLabel = String(parsed.newCategory).trim();
-          var newId = slugForCategory(newLabel);
-          var existing = (profile.categories || []).find(function(c) { return c.id === newId || c.label === newLabel; });
-          if (!existing) {
-            var newCat = { id: newId, label: newLabel, emoji: parsed.newEmoji && String(parsed.newEmoji).trim() ? String(parsed.newEmoji).trim().slice(0, 2) : "📌" };
-            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([newCat]) }); });
-            resolvedCatId = newId;
-          } else {
-            resolvedCatId = existing.id;
-          }
-        } else if (parsed.category && (profile.categories || []).some(function(c) { return c.id === parsed.category; })) {
-          resolvedCatId = parsed.category;
-        }
-        var pri = PRIORITIES.find(function(x) { return x.id === parsed.priority; });
-        var taskId = Date.now().toString();
-        var detailStr = (parsed.detail && String(parsed.detail).trim()) || "";
-        var newTask = { id: taskId, text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
-        setTasks(function(prev) { return [newTask].concat(prev); });
-        setToast("已转为任务：" + refined);
-      } catch (e) { setToast("转化失败，请重试"); }
-    } else {
-      setToast("AI 暂时不可用");
+    var explicitCategory = extractExplicitCategory(n.content || "", categories);
+    var explicitCatObj = explicitCategory && explicitCategory.mode === "existing" ? explicitCategory.category : null;
+    if (explicitCategory && explicitCategory.mode === "new") {
+      var explicitCreated = ensureCategoryOnProfile(profile, explicitCategory.label, "📌");
+      if (explicitCreated.created) setProfile(explicitCreated.profile);
+      explicitCatObj = explicitCreated.category;
     }
+    var explicitHint = explicitCategory
+      ? "\n用户已明确指定分类：" + (explicitCatObj ? ((explicitCatObj.label || explicitCatObj.id) + "（必须优先使用该分类）") : (explicitCategory.label + "（若不存在请创建该分类）"))
+      : "";
+    var userMsg = "把下面这段随笔整理成一个任务，今日日期：" + today + "，本周周一：" + cwMonStr + explicitHint + "\n\n" + (n.content || "").trim();
+    var r = await callAI(buildClsSys(profile), [{ role: "user", content: userMsg }]);
+    var parsed = parseTaskAIResponse(r);
+    var sourceText = (n.content || "").trim();
+    var refined = (parsed && parsed.refinedText && String(parsed.refinedText).trim()) || sourceText.slice(0, 200);
+    var baseNow = new Date();
+    var aiWantsDeadline = parsed && (parsed.type === "deadline" || !!(parsed.deadline && String(parsed.deadline).trim()));
+    var dl = (parsed ? normalizeDateCandidate(parsed.deadline, baseNow) : null) || ((aiWantsDeadline || hasDeadlineCue(sourceText)) ? normalizeDateCandidate(sourceText, baseNow) : null);
+    var wk = normalizeWeekCandidate(parsed ? parsed.week : null, sourceText, CW) || null;
+    var typ = dl ? "deadline" : "week";
+    if (typ === "deadline") wk = null;
+    if (typ === "week" && !wk) wk = null;
+    var defaultCat = explicitCatObj ? explicitCatObj.id : (categories.length > 0 ? categories[0].id : "");
+    var resolvedCat = explicitCatObj;
+    if (!resolvedCat && parsed && parsed.newCategory && String(parsed.newCategory).trim()) {
+      var aiCreated = ensureCategoryOnProfile(profile, String(parsed.newCategory).trim(), parsed.newEmoji);
+      if (aiCreated.created) setProfile(aiCreated.profile);
+      resolvedCat = aiCreated.category;
+    } else if (!resolvedCat && parsed && parsed.category) {
+      resolvedCat = (profile.categories || []).find(function(c) { return c.id === parsed.category; }) || findCategoryByLabel(profile.categories || [], parsed.category);
+    }
+    var resolvedCatId = resolvedCat ? resolvedCat.id : defaultCat;
+    var priorityId = (parsed && parsed.priority) || inferPriorityFromText(sourceText) || "medium";
+    var pri = PRIORITIES.find(function(x) { return x.id === priorityId; });
+    var taskId = Date.now().toString();
+    var detailStr = (parsed && parsed.detail && String(parsed.detail).trim()) || "";
+    var newTask = { id: taskId, text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
+    flushOnNextSaveRef.current = true;
+    setTasks(function(prev) { return [newTask].concat(prev); });
+    showToast("已转为任务：" + refined + " · 已放到" + getTaskPlacementLabel(newTask, CW) + (!parsed && r ? " · AI结果解析失败，已按本地规则整理" : !r ? " · AI暂不可用，已按本地规则整理" : ""));
     setNoteConvertingId(null);
   };
 
@@ -1042,7 +1391,7 @@ export default function TaskBrain() {
     try {
       var r = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
       if (r.error) throw r.error;
-      setToast("已登录，数据将同步到云端");
+      showToast("已登录，数据将同步到云端");
       setAuthPassword("");
     } catch (e) {
       setAuthError(e.message || "登录失败");
@@ -1064,7 +1413,7 @@ export default function TaskBrain() {
     try {
       var r = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
       if (r.error) throw r.error;
-      setToast("注册成功，请查收邮件确认（若需）");
+      showToast("注册成功，请查收邮件确认（若需）");
       setAuthPassword("");
     } catch (e) {
       setAuthError(e.message || "注册失败");
@@ -1074,15 +1423,16 @@ export default function TaskBrain() {
   async function handleLogout() {
     await supabase?.auth.signOut();
     setUser(null);
-    setToast("已退出，数据仅存于本机");
+    showToast("已退出，数据仅存于本机");
   }
 
   function archiveOld() {
     var cutoff = Date.now() - 14 * 864e5;
     var archived = tasks.filter(function(t) { return t.done && t.doneAt && t.doneAt < cutoff; });
-    if (archived.length === 0) { setToast("没有需要归档的任务（完成2周以上才会清理）"); return; }
+    if (archived.length === 0) { showToast("没有需要归档的任务（完成2周以上才会清理）"); return; }
+    flushOnNextSaveRef.current = true;
     setTasks(function(p) { return p.filter(function(t) { return !(t.done && t.doneAt && t.doneAt < cutoff); }); });
-    setToast("已归档 " + archived.length + " 个任务");
+    showToast("已归档 " + archived.length + " 个任务");
   }
 
   function exportJSON() {
@@ -1092,7 +1442,7 @@ export default function TaskBrain() {
     var a = document.createElement("a");
     a.href = url; a.download = "taskbrain-backup-" + new Date().toISOString().split("T")[0] + ".json";
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    setToast("已导出备份文件"); setShowExport(false);
+    showToast("已导出备份文件"); setShowExport(false);
   }
 
   /* ── AI ── */
@@ -1196,10 +1546,11 @@ export default function TaskBrain() {
   var twW = active.filter(function(t) { return t.type === "week" && t.week === CW; });
   var twDL = active.filter(function(t) { return t.type === "deadline" && dlWeek(t.deadline) === CW; });
   var backlog = active.filter(function(t) { return t.type === "week" && !t.week; });
+  var undatedDL = active.filter(function(t) { return t.type === "deadline" && !t.deadline; });
   var allDL = active.filter(function(t) { return t.type === "deadline"; }).sort(function(a, b) { return daysUntil(a.deadline) - daysUntil(b.deadline); });
 
   var taskItemProps = {
-    T: T, CC: CC, CW: CW, nw: nw, weekOpts: weekOpts, categories: categories, dark: dark,
+    T: T, CC: CC, CW: CW, nw: nw, weekOpts: weekOpts, categories: categories, dark: dark, classifyingId: classifyingId,
     onToggle: toggle, onRemove: remove, onUpdate: update,
     onMoveWeek: moveToWeek, onAddSub: addSub, onToggleSub: toggleSub, onRemoveSub: removeSub,
   };
@@ -1265,9 +1616,9 @@ export default function TaskBrain() {
             var label = (catNewLabel || "").trim();
             if (!label) return;
             var emoji = (catNewEmoji || "").trim() || "📌";
-            var id = slugForCategory(label);
-            if ((profile.categories || []).some(function(c) { return c.id === id; })) return;
-            setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).concat([{ id: id, label: label, emoji: emoji }]) }); });
+            var ensured = ensureCategoryOnProfile(profile, label, emoji);
+            if (!ensured.created) return;
+            setProfile(ensured.profile);
             setCatNewLabel(""); setCatNewEmoji("");
           }} style={{ padding: "6px 14px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>添加</button>
         </div>
@@ -1304,7 +1655,6 @@ export default function TaskBrain() {
                   <button type="button" onClick={function() { setCatEditingId(c.id); setCatEditLabel(c.label || c.id); setCatEditEmoji(c.emoji || "📌"); }} style={{ padding: "4px 8px", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
                   <button type="button" onClick={function() {
                     var remaining = (profile.categories || []).filter(function(x) { return x.id !== c.id; });
-                    if (remaining.length === 0) return;
                     var fallbackId = remaining[0] ? remaining[0].id : "";
                     setProfile(function(prev) { return Object.assign({}, prev, { categories: (prev.categories || []).filter(function(x) { return x.id !== c.id; }) }); });
                     setTasks(function(prev) { return prev.map(function(t) { return t.category === c.id ? Object.assign({}, t, { category: fallbackId }) : t; }); });
@@ -1423,7 +1773,7 @@ export default function TaskBrain() {
           onKeyDown={function(e) { if (e.key === "Enter" && !e.nativeEvent.isComposing && input.trim()) addTask(input.trim()); }}
           placeholder="描述任务即可，如：下周三前和PM对齐试点进展、本周五婴儿床下单..."
           style={{ flex: 1, padding: "12px 16px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 10, fontSize: 14, color: T.text, outline: "none", fontFamily: FONT, boxShadow: T.shadow }} />
-        <button onClick={function() { if (input.trim()) addTask(input.trim()); }} disabled={!input.trim() || classifying}
+        <button onClick={function() { if (input.trim()) addTask(input.trim()); }} disabled={!input.trim()}
           style={{ padding: "12px 22px", background: input.trim() ? T.accent : T.inputBorder, color: input.trim() ? "#fff" : T.textMuted, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: input.trim() ? "pointer" : "default", fontFamily: FONT, whiteSpace: "nowrap" }}>
           {classifying ? "分析中..." : "添加"}
         </button>
@@ -1467,6 +1817,12 @@ export default function TaskBrain() {
             });
           })()}
 
+          {undatedDL.length > 0 && (
+            <Section T={T} title="⚠️ 待补截止日" count={undatedDL.length} accent="#CA8A04">
+              {sortP(undatedDL).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
+            </Section>
+          )}
+
           <Section T={T} title="📥 待安排" count={backlog.length} accent={T.textSec}>
             {backlog.length > 0
               ? sortP(backlog).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })
@@ -1498,19 +1854,36 @@ export default function TaskBrain() {
       {view === "category" && (
         <div>
           {categories.length === 0
-            ? <Empty msg="暂无分类，请在设置中添加分类或通过添加任务智能创建" />
+            ? active.length > 0
+              ? <Section T={T} title="📥 未分类" count={active.length} accent={T.textSec}>{sortP(active).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}</Section>
+              : <Empty msg="暂无分类，请在设置中添加分类或通过添加任务智能创建" />
             : active.length === 0
             ? <Empty msg="暂无任务" />
-            : categories.map(function(cat) {
-                var list = active.filter(function(t) { return t.category === cat.id; });
-                if (!list.length) return null;
-                var clr = CC[cat.id];
-                return (
-                  <Section T={T} key={cat.id} title={(cat.emoji || "📌") + " " + (cat.label || cat.id)} count={list.length} accent={clr ? clr.color : undefined}>
-                    {sortP(list).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
-                  </Section>
-                );
-              })
+            : (
+              <div>
+                {categories.map(function(cat) {
+                  var list = active.filter(function(t) { return t.category === cat.id; });
+                  if (!list.length) return null;
+                  var clr = CC[cat.id];
+                  return (
+                    <Section T={T} key={cat.id} title={(cat.emoji || "📌") + " " + (cat.label || cat.id)} count={list.length} accent={clr ? clr.color : undefined}>
+                      {sortP(list).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
+                    </Section>
+                  );
+                })}
+                {(function() {
+                  var uncategorized = active.filter(function(t) {
+                    return !t.category || !categories.some(function(cat) { return cat.id === t.category; });
+                  });
+                  if (uncategorized.length === 0) return null;
+                  return (
+                    <Section T={T} title="📥 未分类" count={uncategorized.length} accent={T.textSec}>
+                      {sortP(uncategorized).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
+                    </Section>
+                  );
+                })()}
+              </div>
+            )
           }
         </div>
       )}
@@ -1785,7 +2158,7 @@ export default function TaskBrain() {
         </div>
       )}
 
-      {toast && <Toast message={toast} T={T} onDone={function() { setToast(null); }} />}
+      {toast && <Toast key={toast.id} message={toast.message} T={T} onDone={function() { setToast(null); }} />}
     </div>
   );
 }
