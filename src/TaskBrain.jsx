@@ -742,22 +742,14 @@ function TaskItem(props) {
       opacity: task.done ? 0.5 : 1,
     }}>
       {/* Main row */}
-      {pending ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 32 }}>
-          <div style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: "2px solid " + T.inputBorder, background: "transparent" }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: T.textMuted, lineHeight: 1.5 }}>{task.text}</div>
-            <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>⏳ AI 分析中，请稍候...</div>
-          </div>
-        </div>
-      ) : (
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-        <button onClick={function() { props.onToggle(task.id); }} style={{
+        <button onClick={function() { if (!pending) props.onToggle(task.id); }} style={{
           width: 20, height: 20, borderRadius: 6, flexShrink: 0, marginTop: 2,
-          cursor: "pointer", padding: 0,
+          cursor: pending ? "default" : "pointer", padding: 0,
           border: task.done ? "none" : "2px solid " + T.inputBorder,
           background: task.done ? "#10B981" : "transparent",
           display: "flex", alignItems: "center", justifyContent: "center",
+          opacity: pending ? 0.5 : 1,
         }}>
           {task.done && <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
@@ -775,46 +767,51 @@ function TaskItem(props) {
               paddingLeft: 0, fontStyle: "normal",
             }}>{task.detail.trim()}</div>
           )}
-          {!(task.detail || "").trim() && <div style={{ marginBottom: 6 }} />}
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            {catObj && catColor && (
-              <span style={{ fontSize: 11, fontWeight: 600, color: catColor.color, background: catColor.bg, border: "1px solid " + catColor.border, borderRadius: 6, padding: "1px 7px", whiteSpace: "nowrap" }}>
-                {catObj.emoji} {catObj.label}
-              </span>
-            )}
-            {priObj && <span style={{ fontSize: 11, fontWeight: 700, color: priObj.color }}>{priObj.label}</span>}
-            {task.type === "deadline" && task.deadline && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: dlD < 0 ? "#DC2626" : dlD <= 3 ? "#DC2626" : dlD <= 7 ? "#CA8A04" : T.textSec }}>
-                {"🗓 " + fmtDateWithWeekday(task.deadline) + " · " + (dlD < 0 ? "已过期" + (-dlD) + "天" : dlD === 0 ? "今天截止" : dlD === 1 ? "明天截止" : "还剩" + dlD + "天")}
-              </span>
-            )}
-            {task.type === "deadline" && !task.deadline && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#CA8A04" }}>
-                🗓 待补截止日
-              </span>
-            )}
-            {task.type === "week" && task.week && (
-              <span style={{ fontSize: 11, color: task.week === CW ? T.accent : T.textSec, fontWeight: task.week === CW ? 700 : 500 }}>
-                {"📌 " + getWeekLabel(task.week, CW)}
-              </span>
-            )}
-            {isBacklog && <span style={{ fontSize: 11, color: T.textMuted, fontStyle: "italic" }}>待安排</span>}
-            {hasSubs && (
-              <span style={{ fontSize: 11, color: task.subtasks.filter(function(s) { return s.done; }).length === task.subtasks.length ? "#10B981" : T.textSec, fontWeight: 600 }}>
-                {"☑ " + task.subtasks.filter(function(s) { return s.done; }).length + "/" + task.subtasks.length}
-              </span>
-            )}
-          </div>
+          {!(task.detail || "").trim() && !pending && <div style={{ marginBottom: 6 }} />}
+          {pending && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 3, marginBottom: 6 }}>⏳ AI 分析中，请稍候...</div>}
+          {!pending && (
+            <>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                {catObj && catColor && (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: catColor.color, background: catColor.bg, border: "1px solid " + catColor.border, borderRadius: 6, padding: "1px 7px", whiteSpace: "nowrap" }}>
+                    {catObj.emoji} {catObj.label}
+                  </span>
+                )}
+                {priObj && <span style={{ fontSize: 11, fontWeight: 700, color: priObj.color }}>{priObj.label}</span>}
+                {task.type === "deadline" && task.deadline && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: dlD < 0 ? "#DC2626" : dlD <= 3 ? "#DC2626" : dlD <= 7 ? "#CA8A04" : T.textSec }}>
+                    {"🗓 " + fmtDateWithWeekday(task.deadline) + " · " + (dlD < 0 ? "已过期" + (-dlD) + "天" : dlD === 0 ? "今天截止" : dlD === 1 ? "明天截止" : "还剩" + dlD + "天")}
+                  </span>
+                )}
+                {task.type === "deadline" && !task.deadline && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#CA8A04" }}>
+                    🗓 待补截止日
+                  </span>
+                )}
+                {task.type === "week" && task.week && (
+                  <span style={{ fontSize: 11, color: task.week === CW ? T.accent : T.textSec, fontWeight: task.week === CW ? 700 : 500 }}>
+                    {"📌 " + getWeekLabel(task.week, CW)}
+                  </span>
+                )}
+                {isBacklog && <span style={{ fontSize: 11, color: T.textMuted, fontStyle: "italic" }}>待安排</span>}
+                {hasSubs && (
+                  <span style={{ fontSize: 11, color: task.subtasks.filter(function(s) { return s.done; }).length === task.subtasks.length ? "#10B981" : T.textSec, fontWeight: 600 }}>
+                    {"☑ " + task.subtasks.filter(function(s) { return s.done; }).length + "/" + task.subtasks.length}
+                  </span>
+                )}
+              </div>
 
-          {/* Quick actions */}
-          {!task.done && (
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              {isBacklog && <QuickBtn onClick={function() { props.onMoveWeek(task.id, CW); }} color={T.accent}>→ 本周</QuickBtn>}
-              {isThisWeek && <QuickBtn onClick={function() { props.onMoveWeek(task.id, nw); }} color={T.textSec}>推到下周 →</QuickBtn>}
-            </div>
+              {/* Quick actions */}
+              {!task.done && (
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  {isBacklog && <QuickBtn onClick={function() { props.onMoveWeek(task.id, CW); }} color={T.accent}>→ 本周</QuickBtn>}
+                  {isThisWeek && <QuickBtn onClick={function() { props.onMoveWeek(task.id, nw); }} color={T.textSec}>推到下周 →</QuickBtn>}
+                </div>
+              )}
+
+              <DLWarn task={task} T={T} onExpand={function() { setIsExp(true); }} />
+            </>
           )}
-
-          <DLWarn task={task} T={T} onExpand={function() { setIsExp(true); }} />
         </div>
 
         {/* Action buttons */}
@@ -832,7 +829,6 @@ function TaskItem(props) {
           }
         </div>
       </div>
-      )}
 
       {/* Edit panel */}
       {isEdit && (
@@ -1103,7 +1099,7 @@ export default function TaskBrain() {
           var remoteMs = toTimeMs(remote.updatedAt);
           var localMs = toTimeMs(localSnapshot.updatedAt);
           if (localHasData && localMs && (!remoteMs || localMs > remoteMs + 1000)) {
-            applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+            applySnapshotRef.current(localSnapshot, { source: "local", force: true, forceProfile: true });
             var resync = await saveToSupabase(supabase, uid, localSnapshot);
             if (resync && !resync.error) {
               syncedPayloadRef.current = serializePayload(localSnapshot);
@@ -1111,10 +1107,10 @@ export default function TaskBrain() {
               if (resync.updatedAt) lastCloudUpdatedAtRef.current = resync.updatedAt;
             }
           } else {
-          applySnapshotToState(remote, { source: "cloud", force: true, forceProfile: true });
+          applySnapshotRef.current(remote, { source: "cloud", force: true, forceProfile: true });
           }
         } else if (localHasData) {
-          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+          applySnapshotRef.current(localSnapshot, { source: "local", force: true, forceProfile: true });
           var upload = await saveToSupabase(supabase, uid, localSnapshot);
           if (upload && !upload.error) {
             syncedPayloadRef.current = serializePayload(localSnapshot);
@@ -1122,20 +1118,20 @@ export default function TaskBrain() {
             if (upload.updatedAt) lastCloudUpdatedAtRef.current = upload.updatedAt;
           }
         } else {
-          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+          applySnapshotRef.current(localSnapshot, { source: "local", force: true, forceProfile: true });
         }
       } else {
         if (cancelled) return;
         if (localHasData) {
-          applySnapshotToState(localSnapshot, { source: "local", force: true, forceProfile: true });
+          applySnapshotRef.current(localSnapshot, { source: "local", force: true, forceProfile: true });
         } else {
-          applySnapshotToState(normalizeSnapshot(null), { source: "local", force: true, forceProfile: true });
+          applySnapshotRef.current(normalizeSnapshot(null), { source: "local", force: true, forceProfile: true });
         }
       }
       if (!cancelled) setLoaded(true);
     })();
     return function() { cancelled = true; };
-  }, [authReady, supabase, user?.id, applySnapshotToState]);
+  }, [authReady, supabase, user?.id]);
 
   /* ── 保存：始终写本地；已登录则防抖写 Supabase；blur 时通过 saveFlushRef 立即写入 ── */
   useEffect(function() {
@@ -1179,6 +1175,14 @@ export default function TaskBrain() {
         if (ua && ownUpdatedAtRef.current && ua <= ownUpdatedAtRef.current) {
           // Own echo or stale event from before our latest save — suppress
           syncedPayloadRef.current = currentPayloadRef.current;
+          return;
+        }
+        // Content-based echo suppression: compare serialized payload to avoid loops
+        // when server-side triggers modify updated_at
+        var incomingSerialized = serializePayload(snapshotToPayload(normalizeSnapshot(payload.new)));
+        if (incomingSerialized && incomingSerialized === currentPayloadRef.current) {
+          syncedPayloadRef.current = currentPayloadRef.current;
+          if (ua) ownUpdatedAtRef.current = ua;
           return;
         }
         applySnapshotRef.current(payload.new, { source: "cloud" });
