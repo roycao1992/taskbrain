@@ -2029,7 +2029,18 @@ export default function TaskBrain() {
                   </div>
                 </div>
               ) : (
-                <button onClick={function() { setShowExport(true); }} style={{ width: "100%", padding: "8px 0", border: "1px dashed " + T.accent, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>点击登录 · 同步到手机/电脑</button>
+                <div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>登录后电脑与手机将同步同一份数据，请用同一账号在两端登录。</div>
+                  <input type="email" value={authEmail} onChange={function(e) { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="邮箱"
+                    style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                  <input type="password" value={authPassword} onChange={function(e) { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="密码（至少 6 位）"
+                    style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                  {authError && <div style={{ fontSize: 11, color: "#DC2626", marginBottom: 6 }}>{authError}</div>}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={handleLogin} disabled={authLoading} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>登录</button>
+                    <button onClick={handleSignup} disabled={authLoading} style={{ padding: "4px 10px", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 11, cursor: authLoading ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>注册</button>
+                  </div>
+                </div>
               )}
             </div>
 
