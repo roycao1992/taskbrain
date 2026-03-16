@@ -1531,13 +1531,17 @@ export default function TaskBrain() {
 
   function applySugg() {
     if (!ai || !ai.suggestions) return;
-    setTasks(function(p) { return p.map(function(t) { return ai.suggestions.find(function(s) { return s.taskId === t.id; }) ? Object.assign({}, t, { week: CW }) : t; }); });
+    setTasks(function(p) { return p.map(function(t) { return !t.done && ai.suggestions.find(function(s) { return s.taskId === t.id; }) ? Object.assign({}, t, { week: CW }) : t; }); });
     setAi(null);
   }
 
   /* ── Derived ── */
   var active = tasks.filter(function(t) { return !t.done; });
-  var doneList = tasks.filter(function(t) { return t.done; });
+  function isAssignedThisWeek(t) {
+    return (t.type === "week" && t.week === CW) || (t.type === "deadline" && dlWeek(t.deadline) === CW);
+  }
+  var doneThisWeek = tasks.filter(function(t) { return t.done && isAssignedThisWeek(t); });
+  var doneList = tasks.filter(function(t) { return t.done && !isAssignedThisWeek(t); });
 
   function sortP(list) {
     return list.slice().sort(function(a, b) {
@@ -1549,6 +1553,7 @@ export default function TaskBrain() {
 
   var twW = active.filter(function(t) { return t.type === "week" && t.week === CW; });
   var twDL = active.filter(function(t) { return t.type === "deadline" && dlWeek(t.deadline) === CW; });
+  var overdue = active.filter(function(t) { return t.type === "week" && t.week && t.week < CW; });
   var backlog = active.filter(function(t) { return t.type === "week" && !t.week; });
   var undatedDL = active.filter(function(t) { return t.type === "deadline" && !t.deadline; });
   var allDL = active.filter(function(t) { return t.type === "deadline"; }).sort(function(a, b) { return daysUntil(a.deadline) - daysUntil(b.deadline); });
@@ -1800,12 +1805,19 @@ export default function TaskBrain() {
           <Section T={T} title="📌 本周聚焦" count={twW.length + twDL.length} accent={T.text}>
             {twDL.map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
             {sortP(twW).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
-            {(twW.length + twDL.length) === 0 && <Empty msg="本周没有任务，试试「本周规划」" />}
+            {(twW.length + twDL.length) === 0 && doneThisWeek.length === 0 && <Empty msg="本周没有任务，试试「本周规划」" />}
+            {doneThisWeek.length > 0 && doneThisWeek.map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
           </Section>
+
+          {overdue.length > 0 && (
+            <Section T={T} title="⚠️ 往周未完成" count={overdue.length} accent="#DC2626">
+              {sortP(overdue).map(function(t) { return <TaskItem key={t.id} task={t} {...taskItemProps} />; })}
+            </Section>
+          )}
 
           {(function() {
             var future = {};
-            active.filter(function(t) { return t.type === "week" && t.week && t.week !== CW; }).forEach(function(t) {
+            active.filter(function(t) { return t.type === "week" && t.week && t.week > CW; }).forEach(function(t) {
               future[t.week] = (future[t.week] || []).concat([t]);
             });
             active.filter(function(t) { return t.type === "deadline" && !t.done; }).forEach(function(t) {
