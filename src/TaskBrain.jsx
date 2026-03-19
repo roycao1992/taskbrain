@@ -460,7 +460,7 @@ function setApiKey(key) {
   try { localStorage.setItem("taskbrain-api-key", key); } catch (e) { /* ignore */ }
 }
 
-async function callAI(sys, msgs) {
+async function callAI(sys, msgs, maxTokens) {
   try {
     var apiKey = getApiKey();
     if (!apiKey) return null;
@@ -473,7 +473,7 @@ async function callAI(sys, msgs) {
       },
       body: JSON.stringify({
         model: "deepseek-chat",
-        max_tokens: 1200,
+        max_tokens: maxTokens || 1200,
         messages: messages,
       }),
     });
@@ -511,6 +511,49 @@ function buildDiagSys(prof, stat) {
 }
 
 var SYS_WK = "你是Roy的任务管理助手。从待安排挑任务到本周。1)合计不超8-10 2)高优先先排 3)空白分类补一个。返回JSON: [{\"taskId\":\"id\",\"reason\":\"一句话\"}]";
+
+function buildNoteToTasksSys(prof) {
+  var p = prof || {};
+  var cats = p.categories || [];
+  var catHint = cats.length > 0
+    ? "当前分类：\n" + cats.map(function(c) { return "id: " + c.id + " 标签: " + (c.emoji || "") + " " + (c.label || c.id); }).join("\n") + "\n每个任务可选 category（已有id）或 newCategory（新分类名）+ newEmoji（如📌）。"
+    : "用户暂无分类。每个任务可返回 newCategory 与 newEmoji 创建新分类。";
+  return "你是任务管理助手。根据用户的一段随笔，需要拆成多个任务。\n"
+    + "1) 一条随笔可能包含多个任务（如「买牛奶、约会议、写报告」→ 3条），分别提炼；若只有一件事则返回1条。\n"
+    + "2) 每条任务：refinedText（精简标题，15字内）、detail（易丢失的细节，否则留空）、category（已有id）或 newCategory+newEmoji、priority（urgent/high/medium/low）、type（week或deadline）、deadline（YYYY-MM-DD或null）、week（周任务的目标周周一YYYY-MM-DD或null）。\n"
+    + "3) 有明确截止日时 type:deadline；否则 type:week。\n\n"
+    + catHint + "\n\n"
+    + "只返回一个JSON，不要markdown包裹。格式：\n"
+    + "{\"tasks\":[{\"refinedText\":\"标题\",\"detail\":\"备注或留空\",\"category\":\"id或留空\",\"newCategory\":\"新分类或留空\",\"newEmoji\":\"📌\",\"priority\":\"id\",\"type\":\"week或deadline\",\"deadline\":\"YYYY-MM-DD或null\",\"week\":\"YYYY-MM-DD或null\"},...]}";
+}
+
+function parseTaskArrayResponse(raw) {
+  if (!raw) return null;
+  var text = String(raw).replace(/```json|```/gi, "").trim();
+  if (!text) return null;
+  try {
+    var parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.tasks)) return parsed.tasks;
+    return null;
+  } catch (e) { /* ignore */ }
+  var start = text.indexOf("[");
+  var end = text.lastIndexOf("]");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch (e) { /* ignore */ }
+  }
+  var objStart = text.indexOf("{");
+  var objEnd = text.lastIndexOf("}");
+  if (objStart >= 0 && objEnd > objStart) {
+    try {
+      var obj = JSON.parse(text.slice(objStart, objEnd + 1));
+      return obj && Array.isArray(obj.tasks) ? obj.tasks : null;
+    } catch (e) { /* ignore */ }
+  }
+  return null;
+}
 
 /* ═══════════════════════════ SMALL COMPONENTS ═══════════════════════════ */
 
@@ -953,8 +996,10 @@ export default function TaskBrain() {
   var [noteEditingId, setNoteEditingId] = useState(null);
   var [noteEditContent, setNoteEditContent] = useState("");
   var [noteEditTags, setNoteEditTags] = useState("");
+  var [noteEditTagInput, setNoteEditTagInput] = useState("");
   var [noteNewContent, setNoteNewContent] = useState("");
   var [noteNewTags, setNoteNewTags] = useState("");
+  var [noteNewTagInput, setNoteNewTagInput] = useState("");
   var [noteNewExpanded, setNoteNewExpanded] = useState(false);
   var [noteConvertingId, setNoteConvertingId] = useState(null);
   var [noteSearch, setNoteSearch] = useState("");
@@ -1328,14 +1373,14 @@ export default function TaskBrain() {
     var tags = (noteNewTags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean);
     flushOnNextSaveRef.current = true;
     setNotes(function(p) { return [{ id: now.toString(), content: c, createdAt: now, updatedAt: now, tags: tags, pinned: false }].concat(p); });
-    setNoteNewContent(""); setNoteNewTags(""); setNoteNewExpanded(false);
+    setNoteNewContent(""); setNoteNewTags(""); setNoteNewTagInput(""); setNoteNewExpanded(false);
   }
   function updateNote(id, content, tags) {
     var c = String(content || "").trim();
     var tagArr = Array.isArray(tags) ? tags : (String(tags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean));
     flushOnNextSaveRef.current = true;
     setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { content: c, tags: tagArr, updatedAt: Date.now() }) : n; }); });
-    setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags("");
+    setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags(""); setNoteEditTagInput("");
   }
   function toggleNotePinned(id) {
     flushOnNextSaveRef.current = true;
@@ -1348,28 +1393,9 @@ export default function TaskBrain() {
     if (noteEditingId === id) { setNoteEditingId(null); setNoteEditContent(""); }
   }
 
-  var convertNoteToTask = async function(n) {
-    if (!n || !n.content || noteConvertingId) return;
-    setNoteConvertingId(n.id);
-    var today = new Date().toISOString().split("T")[0];
-    var cwMon = getWeekRange(CW).mon;
-    var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
-    var explicitCategory = extractExplicitCategory(n.content || "", categories);
-    var explicitCatObj = explicitCategory && explicitCategory.mode === "existing" ? explicitCategory.category : null;
-    if (explicitCategory && explicitCategory.mode === "new") {
-      var explicitCreated = ensureCategoryOnProfile(profile, explicitCategory.label, "📌");
-      if (explicitCreated.created) setProfile(explicitCreated.profile);
-      explicitCatObj = explicitCreated.category;
-    }
-    var explicitHint = explicitCategory
-      ? "\n用户已明确指定分类：" + (explicitCatObj ? ((explicitCatObj.label || explicitCatObj.id) + "（必须优先使用该分类）") : (explicitCategory.label + "（若不存在请创建该分类）"))
-      : "";
-    var userMsg = "把下面这段随笔整理成一个任务，今日日期：" + today + "，本周周一：" + cwMonStr + explicitHint + "\n\n" + (n.content || "").trim();
-    var r = await callAI(buildClsSys(profile), [{ role: "user", content: userMsg }]);
-    var parsed = parseTaskAIResponse(r);
-    var sourceText = (n.content || "").trim();
-    var refined = (parsed && parsed.refinedText && String(parsed.refinedText).trim()) || sourceText.slice(0, 200);
+  function resolveParsedTaskToPreview(parsed, sourceText, explicitCatObj) {
     var baseNow = new Date();
+    var refined = (parsed && parsed.refinedText && String(parsed.refinedText).trim()) || sourceText.slice(0, 200);
     var aiWantsDeadline = parsed && (parsed.type === "deadline" || !!(parsed.deadline && String(parsed.deadline).trim()));
     var dl = (parsed ? normalizeDateCandidate(parsed.deadline, baseNow) : null) || ((aiWantsDeadline || hasDeadlineCue(sourceText)) ? normalizeDateCandidate(sourceText, baseNow) : null);
     var wk = normalizeWeekCandidate(parsed ? parsed.week : null, sourceText, CW) || null;
@@ -1389,18 +1415,78 @@ export default function TaskBrain() {
     var priorityId = (parsed && parsed.priority) || inferPriorityFromText(sourceText) || "medium";
     var pri = PRIORITIES.find(function(x) { return x.id === priorityId; });
     var detailStr = (parsed && parsed.detail && String(parsed.detail).trim()) || "";
-    var previewTask = { text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null };
-    setConvertPreview({ task: previewTask, sourceNote: n, parsed: !!parsed, aiAvailable: !!r });
+    return { text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null };
+  }
+
+  var convertNoteToTask = async function(n) {
+    if (!n || !n.content || noteConvertingId) return;
+    setNoteConvertingId(n.id);
+    var today = new Date().toISOString().split("T")[0];
+    var cwMon = getWeekRange(CW).mon;
+    var cwMonStr = cwMon.getFullYear() + "-" + String(cwMon.getMonth() + 1).padStart(2, "0") + "-" + String(cwMon.getDate()).padStart(2, "0");
+    var explicitCategory = extractExplicitCategory(n.content || "", categories);
+    var explicitCatObj = explicitCategory && explicitCategory.mode === "existing" ? explicitCategory.category : null;
+    if (explicitCategory && explicitCategory.mode === "new") {
+      var explicitCreated = ensureCategoryOnProfile(profile, explicitCategory.label, "📌");
+      if (explicitCreated.created) setProfile(explicitCreated.profile);
+      explicitCatObj = explicitCreated.category;
+    }
+    var explicitHint = explicitCategory
+      ? "\n用户已明确指定分类：" + (explicitCatObj ? ((explicitCatObj.label || explicitCatObj.id) + "（必须优先使用该分类）") : (explicitCategory.label + "（若不存在请创建该分类）"))
+      : "";
+    var userMsg = "把下面这段随笔整理成任务（可能多条），今日日期：" + today + "，本周周一：" + cwMonStr + explicitHint + "\n\n" + (n.content || "").trim();
+    var r = await callAI(buildNoteToTasksSys(profile), [{ role: "user", content: userMsg }], 2000);
+    var arr = parseTaskArrayResponse(r);
+    var sourceText = (n.content || "").trim();
+    var defaultCat = explicitCatObj ? explicitCatObj.id : (categories.length > 0 ? categories[0].id : "");
+    var tasks = [];
+    if (Array.isArray(arr) && arr.length > 0) {
+      tasks = arr.map(function(p) { return resolveParsedTaskToPreview(p, sourceText, explicitCatObj); });
+    } else {
+      tasks = [resolveParsedTaskToPreview(null, sourceText, explicitCatObj)];
+    }
+    setConvertPreview({ tasks: tasks, sourceNote: n, parsed: !!arr?.length, aiAvailable: !!r, markProcessed: false });
     setNoteConvertingId(null);
   };
-  function confirmConvertTask() {
+
+  function updateConvertPreviewTask(idx, updates) {
     if (!convertPreview) return;
-    var t = convertPreview.task;
-    var taskId = Date.now().toString();
-    var newTask = { id: taskId, text: t.text, detail: t.detail || "", category: t.category, priority: t.priority || "medium", type: t.type, week: t.type === "week" ? t.week : null, deadline: t.type === "deadline" ? t.deadline : null, done: false, subtasks: [] };
+    setConvertPreview(function(p) {
+      var next = p.tasks.slice();
+      next[idx] = Object.assign({}, next[idx], updates);
+      return Object.assign({}, p, { tasks: next });
+    });
+  }
+  function removeConvertPreviewTask(idx) {
+    if (!convertPreview) return;
+    setConvertPreview(function(p) {
+      var next = p.tasks.filter(function(_, i) { return i !== idx; });
+      return next.length ? Object.assign({}, p, { tasks: next }) : null;
+    });
+  }
+  function addConvertPreviewTask() {
+    if (!convertPreview) return;
+    var defaultCat = categories.length > 0 ? categories[0].id : "";
+    setConvertPreview(function(p) {
+      return Object.assign({}, p, { tasks: p.tasks.concat([{ text: "", detail: "", category: defaultCat, priority: "medium", type: "week", week: null, deadline: null }]) });
+    });
+  }
+
+  function confirmConvertTask() {
+    if (!convertPreview || !convertPreview.tasks.length) return;
+    var sourceNoteId = convertPreview.sourceNote?.id;
+    var validTasks = convertPreview.tasks.filter(function(t) { return (t.text || "").trim(); });
+    if (validTasks.length === 0) { showToast("请至少填写一条任务的标题"); return; }
+    var newTasks = validTasks.map(function(t) {
+      var id = Date.now().toString() + "-" + Math.random().toString(36).slice(2, 6);
+      return { id: id, text: (t.text || "").trim(), detail: (t.detail || "").trim() || "", category: t.category || "", priority: t.priority || "medium", type: t.type || "week", week: t.type === "week" ? t.week : null, deadline: t.type === "deadline" ? t.deadline : null, done: false, subtasks: [], sourceNoteId: sourceNoteId };
+    });
     flushOnNextSaveRef.current = true;
-    setTasks(function(prev) { return [newTask].concat(prev); });
-    showToast("已转为任务：" + t.text + " · 已放到" + getTaskPlacementLabel(newTask, CW) + (!convertPreview.parsed && convertPreview.aiAvailable ? " · AI结果解析失败，已按本地规则整理" : !convertPreview.aiAvailable ? " · AI暂不可用，已按本地规则整理" : ""));
+    setTasks(function(prev) { return newTasks.concat(prev); });
+    if (convertPreview.markProcessed && sourceNoteId) {
+      setNotes(function(p) { return p.map(function(n) { return n.id === sourceNoteId ? Object.assign({}, n, { convertedAt: Date.now() }) : n; }); });
+    }
+    showToast("已创建 " + newTasks.length + " 条任务" + (convertPreview.markProcessed ? "，随笔已标记已处理" : ""));
     setConvertPreview(null);
   }
 
@@ -1995,11 +2081,36 @@ export default function TaskBrain() {
               <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
                 <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} placeholder="随便写点什么… 支持 Markdown"
                   style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 8 }} />
-                <input type="text" value={noteNewTags} onChange={function(e) { setNoteNewTags(e.target.value); }} placeholder="标签，逗号分隔（如：工作, 想法）"
-                  style={{ width: "100%", padding: "6px 10px", marginBottom: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                    {(noteNewTags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean).map(function(t) {
+                      return (
+                        <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 11, color: T.textSec, background: T.secBadge, borderRadius: 4, padding: "2px 6px" }}>
+                          {t}
+                          <button type="button" onClick={function() { setNoteNewTags((noteNewTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean).filter(function(x) { return x !== t; }).join(", ")); }} style={{ padding: 0, margin: 0, border: "none", background: "none", cursor: "pointer", fontSize: 12, color: T.textMuted, lineHeight: 1 }}>×</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {allNoteTags.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <div style={{ fontSize: 10, color: T.textMuted, marginBottom: 4 }}>可选：</div>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {allNoteTags.filter(function(t) { return !(noteNewTags || "").split(/[,，\s]+/).map(function(x) { return x.trim().toLowerCase(); }).filter(Boolean).includes(t.toLowerCase()); }).map(function(t) {
+                        return (
+                          <button key={t} type="button" onClick={function() { var arr = (noteNewTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean); if (!arr.map(function(x) { return x.toLowerCase(); }).includes(t.toLowerCase())) setNoteNewTags(arr.concat([t]).join(", ")); }} style={{ padding: "2px 8px", border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>{t}</button>
+                        );
+                      })}
+                      </div>
+                    </div>
+                  )}
+                  <input type="text" value={noteNewTagInput} onChange={function(e) { setNoteNewTagInput(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter" || e.key === "," || e.key === "，") { e.preventDefault(); var v = noteNewTagInput.trim(); if (v) { var arr = (noteNewTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean); if (!arr.map(function(x) { return x.toLowerCase(); }).includes(v.toLowerCase())) setNoteNewTags(arr.concat([v]).join(", ")); setNoteNewTagInput(""); } } }} placeholder="输入新标签，回车或逗号添加"
+                    style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button type="button" onClick={function() { addNote(noteNewContent); }} disabled={!noteNewContent.trim()} style={{ padding: "8px 16px", background: noteNewContent.trim() ? T.accent : T.inputBorder, color: noteNewContent.trim() ? "#fff" : T.textMuted, border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: noteNewContent.trim() ? "pointer" : "default", fontFamily: FONT }}>保存</button>
-                  <button type="button" onClick={function() { setNoteNewExpanded(false); setNoteNewContent(""); setNoteNewTags(""); }} style={{ padding: "8px 16px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                  <button type="button" onClick={function() { setNoteNewExpanded(false); setNoteNewContent(""); setNoteNewTags(""); setNoteNewTagInput(""); }} style={{ padding: "8px 16px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
                 </div>
               </div>
             )}
@@ -2016,11 +2127,36 @@ export default function TaskBrain() {
                     {isEditing ? (
                       <div>
                         <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
-                        <input type="text" value={noteEditTags} onChange={function(e) { setNoteEditTags(e.target.value); }} placeholder="标签，逗号分隔"
-                          style={{ width: "100%", padding: "6px 10px", marginBottom: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                            {(noteEditTags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean).map(function(t) {
+                              return (
+                                <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 11, color: T.textSec, background: T.secBadge, borderRadius: 4, padding: "2px 6px" }}>
+                                  {t}
+                                  <button type="button" onClick={function() { setNoteEditTags((noteEditTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean).filter(function(x) { return x !== t; }).join(", ")); }} style={{ padding: 0, margin: 0, border: "none", background: "none", cursor: "pointer", fontSize: 12, color: T.textMuted, lineHeight: 1 }}>×</button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                          {allNoteTags.length > 0 && (
+                            <div style={{ marginBottom: 6 }}>
+                              <div style={{ fontSize: 10, color: T.textMuted, marginBottom: 4 }}>可选：</div>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                              {allNoteTags.filter(function(t) { return !(noteEditTags || "").split(/[,，\s]+/).map(function(x) { return x.trim().toLowerCase(); }).filter(Boolean).includes(t.toLowerCase()); }).map(function(t) {
+                                return (
+                                  <button key={t} type="button" onClick={function() { var arr = (noteEditTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean); if (!arr.map(function(x) { return x.toLowerCase(); }).includes(t.toLowerCase())) setNoteEditTags(arr.concat([t]).join(", ")); }} style={{ padding: "2px 8px", border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>{t}</button>
+                                );
+                              })}
+                              </div>
+                            </div>
+                          )}
+                          <input type="text" value={noteEditTagInput} onChange={function(e) { setNoteEditTagInput(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter" || e.key === "," || e.key === "，") { e.preventDefault(); var v = noteEditTagInput.trim(); if (v) { var arr = (noteEditTags || "").split(/[,，\s]+/).map(function(x) { return x.trim(); }).filter(Boolean); if (!arr.map(function(x) { return x.toLowerCase(); }).includes(v.toLowerCase())) setNoteEditTags(arr.concat([v]).join(", ")); setNoteEditTagInput(""); } } }} placeholder="输入新标签，回车或逗号添加"
+                            style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                        </div>
                         <div style={{ display: "flex", gap: 8 }}>
                           <button type="button" onClick={function() { updateNote(n.id, noteEditContent, noteEditTags); }} style={{ padding: "6px 14px", background: T.accent, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT }}>保存</button>
-                          <button type="button" onClick={function() { setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags(""); }} style={{ padding: "6px 14px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                          <button type="button" onClick={function() { setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags(""); setNoteEditTagInput(""); }} style={{ padding: "6px 14px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
                         </div>
                       </div>
                     ) : (
@@ -2054,9 +2190,12 @@ export default function TaskBrain() {
                             ); })}
                           </div>
                         )}
-                        <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>{fmtNoteTime(n.updatedAt || n.createdAt)}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 11, color: T.textMuted }}>{fmtNoteTime(n.updatedAt || n.createdAt)}</span>
+                          {n.convertedAt && <span style={{ fontSize: 10, color: "#10B981", background: "rgba(16,185,129,0.15)", borderRadius: 4, padding: "1px 6px" }}>已处理</span>}
+                        </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); setNoteEditTags((n.tags || []).join(", ")); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
+                          <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); setNoteEditTags((n.tags || []).join(", ")); setNoteEditTagInput(""); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
                           <button type="button" onClick={function() { removeNote(n.id); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: "#DC2626" }}>删除</button>
                           <button type="button" onClick={function() { convertNoteToTask(n); }} disabled={noteConvertingId === n.id} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: noteConvertingId === n.id ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>{noteConvertingId === n.id ? "转化中…" : "AI 转为任务"}</button>
                         </div>
@@ -2285,23 +2424,54 @@ export default function TaskBrain() {
 
       {toast && <Toast key={toast.id} message={toast.message} T={T} onDone={function() { setToast(null); }} />}
 
-      {/* AI 转为任务：预览确认弹窗 */}
+      {/* AI 转为任务：可编辑预览确认弹窗 */}
       {convertPreview && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20 }} onClick={function(e) { if (e.target === e.currentTarget) setConvertPreview(null); }}>
-          <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 12, padding: 20, maxWidth: 420, width: "100%", boxShadow: "0 8px 32px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 12 }}>确认转为任务</div>
-            <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}><strong>标题：</strong>{convertPreview.task.text}</div>
-            {convertPreview.task.detail && <div style={{ fontSize: 12, color: T.textSec, marginBottom: 8 }}><strong>备注：</strong>{convertPreview.task.detail}</div>}
-            <div style={{ fontSize: 12, color: T.textSec, marginBottom: 16 }}>
-              {categories.find(function(c) { return c.id === convertPreview.task.category; }) && <span style={{ marginRight: 8 }}>{(categories.find(function(c) { return c.id === convertPreview.task.category; }).emoji || "📌") + " " + (categories.find(function(c) { return c.id === convertPreview.task.category; }).label || "")}</span>}
-              <span style={{ marginRight: 8 }}>{PRIORITIES.find(function(p) { return p.id === convertPreview.task.priority; })?.label || "中"}</span>
-              {convertPreview.task.type === "deadline" && convertPreview.task.deadline && <span>🗓 {fmtDateWithWeekday(convertPreview.task.deadline)}</span>}
-              {convertPreview.task.type === "week" && convertPreview.task.week && <span>📌 {getWeekLabel(convertPreview.task.week, CW)}</span>}
-              {convertPreview.task.type === "week" && !convertPreview.task.week && <span>待安排</span>}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20, overflowY: "auto" }} onClick={function(e) { if (e.target === e.currentTarget) setConvertPreview(null); }}>
+          <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 12, padding: 20, maxWidth: 480, width: "100%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 16 }}>确认转为任务（可编辑）</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+              {convertPreview.tasks.map(function(t, idx) {
+                return (
+                  <div key={idx} style={{ background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 10, padding: 12, position: "relative" }}>
+                    <button type="button" onClick={function() { removeConvertPreviewTask(idx); }} style={{ position: "absolute", top: 8, right: 8, padding: 2, border: "none", background: "none", cursor: "pointer", fontSize: 14, color: T.textMuted }} title="删除">×</button>
+                    <input type="text" value={t.text} onChange={function(e) { updateConvertPreviewTask(idx, { text: e.target.value }); }} placeholder="任务标题"
+                      style={{ width: "100%", padding: "6px 10px", marginBottom: 6, background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                    <input type="text" value={t.detail} onChange={function(e) { updateConvertPreviewTask(idx, { detail: e.target.value }); }} placeholder="备注（可选）"
+                      style={{ width: "100%", padding: "4px 8px", marginBottom: 8, background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 12, color: T.textSec, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      <select value={t.category} onChange={function(e) { updateConvertPreviewTask(idx, { category: e.target.value }); }} style={{ padding: "4px 8px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, color: T.text, fontFamily: FONT, outline: "none" }}>
+                        <option value="">未分类</option>
+                        {(categories || []).map(function(c) { return <option key={c.id} value={c.id}>{(c.emoji || "📌") + " " + (c.label || c.id)}</option>; })}
+                      </select>
+                      <select value={t.priority} onChange={function(e) { updateConvertPreviewTask(idx, { priority: e.target.value }); }} style={{ padding: "4px 8px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, color: T.text, fontFamily: FONT, outline: "none" }}>
+                        {PRIORITIES.map(function(p) { return <option key={p.id} value={p.id}>{p.label}</option>; })}
+                      </select>
+                      <select value={t.type} onChange={function(e) { var typ = e.target.value; updateConvertPreviewTask(idx, { type: typ, week: typ === "week" ? t.week : null, deadline: typ === "deadline" ? t.deadline : null }); }} style={{ padding: "4px 8px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, color: T.text, fontFamily: FONT, outline: "none" }}>
+                        <option value="week">周任务</option>
+                        <option value="deadline">截止日</option>
+                      </select>
+                      {t.type === "week" && (
+                        <select value={t.week || ""} onChange={function(e) { updateConvertPreviewTask(idx, { week: e.target.value || null }); }} style={{ padding: "4px 8px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, color: T.text, fontFamily: FONT, outline: "none" }}>
+                          <option value="">待安排</option>
+                          {weekOpts.map(function(w) { return <option key={w.key} value={w.key}>{w.label}</option>; })}
+                        </select>
+                      )}
+                      {t.type === "deadline" && (
+                        <input type="date" value={t.deadline || ""} onChange={function(e) { updateConvertPreviewTask(idx, { deadline: e.target.value || null }); }} style={{ padding: "4px 8px", background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 4, fontSize: 11, color: T.text, fontFamily: FONT, outline: "none" }} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+            <button type="button" onClick={addConvertPreviewTask} style={{ width: "100%", padding: "8px 0", marginBottom: 16, border: "1px dashed " + T.cardBorder, borderRadius: 8, fontSize: 12, color: T.textSec, cursor: "pointer", fontFamily: FONT, background: "transparent" }}>+ 添加一条</button>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 13, color: T.textSec, cursor: "pointer" }}>
+              <input type="checkbox" checked={convertPreview.markProcessed} onChange={function(e) { setConvertPreview(function(p) { return Object.assign({}, p, { markProcessed: e.target.checked }); }); }} />
+              转完后标记随笔已处理
+            </label>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button type="button" onClick={function() { setConvertPreview(null); }} style={{ padding: "8px 16px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>取消</button>
-              <button type="button" onClick={confirmConvertTask} style={{ padding: "8px 16px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>确认创建</button>
+              <button type="button" onClick={confirmConvertTask} style={{ padding: "8px 16px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>确认创建 {convertPreview.tasks.length} 条</button>
             </div>
           </div>
         </div>
