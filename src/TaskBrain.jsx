@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
 import { getSupabase } from "./lib/supabase";
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
@@ -951,9 +952,15 @@ export default function TaskBrain() {
   var [noteExpandedId, setNoteExpandedId] = useState(null);
   var [noteEditingId, setNoteEditingId] = useState(null);
   var [noteEditContent, setNoteEditContent] = useState("");
+  var [noteEditTags, setNoteEditTags] = useState("");
   var [noteNewContent, setNoteNewContent] = useState("");
+  var [noteNewTags, setNoteNewTags] = useState("");
   var [noteNewExpanded, setNoteNewExpanded] = useState(false);
   var [noteConvertingId, setNoteConvertingId] = useState(null);
+  var [noteSearch, setNoteSearch] = useState("");
+  var [noteTimeFilter, setNoteTimeFilter] = useState("all");
+  var [noteTagFilter, setNoteTagFilter] = useState("");
+  var [convertPreview, setConvertPreview] = useState(null);
   var [dataSource, setDataSource] = useState(null);
   var inputRef = useRef(null);
   var saveTimeoutRef = useRef(null);
@@ -1318,15 +1325,21 @@ export default function TaskBrain() {
     var c = String(content || "").trim();
     if (!c) return;
     var now = Date.now();
+    var tags = (noteNewTags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean);
     flushOnNextSaveRef.current = true;
-    setNotes(function(p) { return [{ id: now.toString(), content: c, createdAt: now, updatedAt: now }].concat(p); });
-    setNoteNewContent(""); setNoteNewExpanded(false);
+    setNotes(function(p) { return [{ id: now.toString(), content: c, createdAt: now, updatedAt: now, tags: tags, pinned: false }].concat(p); });
+    setNoteNewContent(""); setNoteNewTags(""); setNoteNewExpanded(false);
   }
-  function updateNote(id, content) {
+  function updateNote(id, content, tags) {
     var c = String(content || "").trim();
+    var tagArr = Array.isArray(tags) ? tags : (String(tags || "").split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean));
     flushOnNextSaveRef.current = true;
-    setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { content: c, updatedAt: Date.now() }) : n; }); });
-    setNoteEditingId(null); setNoteEditContent("");
+    setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { content: c, tags: tagArr, updatedAt: Date.now() }) : n; }); });
+    setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags("");
+  }
+  function toggleNotePinned(id) {
+    flushOnNextSaveRef.current = true;
+    setNotes(function(p) { return p.map(function(n) { return n.id === id ? Object.assign({}, n, { pinned: !n.pinned }) : n; }); });
   }
   function removeNote(id) {
     if (!window.confirm("确定删除这条随笔？")) return;
@@ -1375,14 +1388,21 @@ export default function TaskBrain() {
     var resolvedCatId = resolvedCat ? resolvedCat.id : defaultCat;
     var priorityId = (parsed && parsed.priority) || inferPriorityFromText(sourceText) || "medium";
     var pri = PRIORITIES.find(function(x) { return x.id === priorityId; });
-    var taskId = Date.now().toString();
     var detailStr = (parsed && parsed.detail && String(parsed.detail).trim()) || "";
-    var newTask = { id: taskId, text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null, done: false, subtasks: [] };
-    flushOnNextSaveRef.current = true;
-    setTasks(function(prev) { return [newTask].concat(prev); });
-    showToast("已转为任务：" + refined + " · 已放到" + getTaskPlacementLabel(newTask, CW) + (!parsed && r ? " · AI结果解析失败，已按本地规则整理" : !r ? " · AI暂不可用，已按本地规则整理" : ""));
+    var previewTask = { text: refined, detail: detailStr, category: resolvedCatId, priority: (pri && pri.id) || "medium", type: typ, week: typ === "week" ? wk : null, deadline: typ === "deadline" ? dl : null };
+    setConvertPreview({ task: previewTask, sourceNote: n, parsed: !!parsed, aiAvailable: !!r });
     setNoteConvertingId(null);
   };
+  function confirmConvertTask() {
+    if (!convertPreview) return;
+    var t = convertPreview.task;
+    var taskId = Date.now().toString();
+    var newTask = { id: taskId, text: t.text, detail: t.detail || "", category: t.category, priority: t.priority || "medium", type: t.type, week: t.type === "week" ? t.week : null, deadline: t.type === "deadline" ? t.deadline : null, done: false, subtasks: [] };
+    flushOnNextSaveRef.current = true;
+    setTasks(function(prev) { return [newTask].concat(prev); });
+    showToast("已转为任务：" + t.text + " · 已放到" + getTaskPlacementLabel(newTask, CW) + (!convertPreview.parsed && convertPreview.aiAvailable ? " · AI结果解析失败，已按本地规则整理" : !convertPreview.aiAvailable ? " · AI暂不可用，已按本地规则整理" : ""));
+    setConvertPreview(null);
+  }
 
   async function handleLogin() {
     if (!supabase) return;
@@ -1563,6 +1583,44 @@ export default function TaskBrain() {
     onToggle: toggle, onRemove: remove, onUpdate: update,
     onMoveWeek: moveToWeek, onAddSub: addSub, onToggleSub: toggleSub, onRemoveSub: removeSub,
   };
+
+  var filteredNotes = useMemo(function() {
+    var list = notes.slice();
+    var search = (noteSearch || "").trim().toLowerCase();
+    if (search) {
+      list = list.filter(function(n) { return (n.content || "").toLowerCase().includes(search); });
+    }
+    var tagFilter = (noteTagFilter || "").trim();
+    if (tagFilter) {
+      list = list.filter(function(n) { return (n.tags || []).some(function(t) { return t.toLowerCase() === tagFilter.toLowerCase(); }); });
+    }
+    var now = Date.now();
+    var dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    var dayStartMs = dayStart.getTime();
+    var weekRange = getWeekRange(CW);
+    var weekStartMs = weekRange.mon.getTime();
+    var weekEndMs = weekRange.sun.getTime() + 864e5;
+    var monthStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1);
+    var monthStartMs = monthStart.getTime();
+    if (noteTimeFilter === "today") {
+      list = list.filter(function(n) { var ts = n.updatedAt || n.createdAt || 0; return ts >= dayStartMs; });
+    } else if (noteTimeFilter === "week") {
+      list = list.filter(function(n) { var ts = n.updatedAt || n.createdAt || 0; return ts >= weekStartMs && ts < weekEndMs; });
+    } else if (noteTimeFilter === "month") {
+      list = list.filter(function(n) { var ts = n.updatedAt || n.createdAt || 0; return ts >= monthStartMs; });
+    }
+    return list.slice().sort(function(a, b) {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    });
+  }, [notes, noteSearch, noteTagFilter, noteTimeFilter, CW]);
+
+  var allNoteTags = useMemo(function() {
+    var set = new Set();
+    notes.forEach(function(n) { (n.tags || []).forEach(function(t) { if (t) set.add(t); }); });
+    return Array.from(set).sort();
+  }, [notes]);
 
   /* ── Loading ── */
   if (!loaded) {
@@ -1907,58 +1965,98 @@ export default function TaskBrain() {
       {/* ── NOTES VIEW ── */}
       {view === "notes" && (
         <div>
+          <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <input type="text" value={noteSearch} onChange={function(e) { setNoteSearch(e.target.value); }} placeholder="搜索随笔内容…"
+              style={{ padding: "8px 12px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 13, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: T.textSec, marginRight: 4 }}>时间</span>
+              {[{ v: "all", l: "全部" }, { v: "today", l: "今天" }, { v: "week", l: "本周" }, { v: "month", l: "本月" }].map(function(o) {
+                return (
+                  <button key={o.v} type="button" onClick={function() { setNoteTimeFilter(o.v); }} style={{ padding: "4px 10px", border: "1px solid " + (noteTimeFilter === o.v ? T.accent : T.cardBorder), borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, background: noteTimeFilter === o.v ? T.accent : "transparent", color: noteTimeFilter === o.v ? "#fff" : T.textSec }}>{o.l}</button>
+                );
+              })}
+            </div>
+            {allNoteTags.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", paddingTop: 4, borderTop: "1px solid " + T.cardBorder }}>
+                <span style={{ fontSize: 12, color: T.textSec, marginRight: 4 }}>标签</span>
+                {allNoteTags.map(function(tag) {
+                  var active = noteTagFilter.toLowerCase() === tag.toLowerCase();
+                  return (
+                    <button key={tag} type="button" onClick={function() { setNoteTagFilter(active ? "" : tag); }} style={{ padding: "2px 8px", border: "1px solid " + (active ? T.accent : T.cardBorder), borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: active ? T.accent : "transparent", color: active ? "#fff" : T.textSec }}>{tag}</button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <div style={{ marginBottom: 20 }}>
             {!noteNewExpanded ? (
               <button type="button" onClick={function() { setNoteNewExpanded(true); }} style={{ padding: "10px 18px", background: T.card, border: "1px dashed " + T.cardBorder, borderRadius: 10, fontSize: 14, fontWeight: 600, color: T.textSec, cursor: "pointer", fontFamily: FONT, width: "100%", textAlign: "left" }}>📝 写随笔</button>
             ) : (
               <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
-                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} placeholder="随便写点什么..."
-                  style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 10 }} />
+                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} placeholder="随便写点什么… 支持 Markdown"
+                  style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 8 }} />
+                <input type="text" value={noteNewTags} onChange={function(e) { setNoteNewTags(e.target.value); }} placeholder="标签，逗号分隔（如：工作, 想法）"
+                  style={{ width: "100%", padding: "6px 10px", marginBottom: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
                 <div style={{ display: "flex", gap: 8 }}>
                   <button type="button" onClick={function() { addNote(noteNewContent); }} disabled={!noteNewContent.trim()} style={{ padding: "8px 16px", background: noteNewContent.trim() ? T.accent : T.inputBorder, color: noteNewContent.trim() ? "#fff" : T.textMuted, border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: noteNewContent.trim() ? "pointer" : "default", fontFamily: FONT }}>保存</button>
-                  <button type="button" onClick={function() { setNoteNewExpanded(false); setNoteNewContent(""); }} style={{ padding: "8px 16px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                  <button type="button" onClick={function() { setNoteNewExpanded(false); setNoteNewContent(""); setNoteNewTags(""); }} style={{ padding: "8px 16px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
                 </div>
               </div>
             )}
           </div>
-          {notes.length === 0 ? (
-            <Empty msg="还没有随笔，点击上方写一条吧" />
+          {filteredNotes.length === 0 ? (
+            <Empty msg={notes.length === 0 ? "还没有随笔，点击上方写一条吧" : "没有符合条件的随笔"} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {notes.map(function(n) {
+              {filteredNotes.map(function(n) {
                 var isEditing = noteEditingId === n.id;
                 var summary = (n.content || "").length > 80 ? (n.content || "").slice(0, 80) + "…" : (n.content || "");
                 return (
-                  <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
+                  <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, position: "relative" }}>
                     {isEditing ? (
                       <div>
-                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 10 }} />
+                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
+                        <input type="text" value={noteEditTags} onChange={function(e) { setNoteEditTags(e.target.value); }} placeholder="标签，逗号分隔"
+                          style={{ width: "100%", padding: "6px 10px", marginBottom: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, fontSize: 12, color: T.text, fontFamily: FONT, outline: "none", boxSizing: "border-box" }} />
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button type="button" onClick={function() { updateNote(n.id, noteEditContent); }} style={{ padding: "6px 14px", background: T.accent, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT }}>保存</button>
-                          <button type="button" onClick={function() { setNoteEditingId(null); setNoteEditContent(""); }} style={{ padding: "6px 14px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
+                          <button type="button" onClick={function() { updateNote(n.id, noteEditContent, noteEditTags); }} style={{ padding: "6px 14px", background: T.accent, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT }}>保存</button>
+                          <button type="button" onClick={function() { setNoteEditingId(null); setNoteEditContent(""); setNoteEditTags(""); }} style={{ padding: "6px 14px", background: "transparent", border: "1px solid " + T.cardBorder, borderRadius: 6, fontSize: 12, cursor: "pointer", fontFamily: FONT, color: T.textSec }}>取消</button>
                         </div>
                       </div>
                     ) : (
                       <>
+                        <button type="button" onClick={function() { toggleNotePinned(n.id); }} style={{ position: "absolute", top: 10, right: 10, padding: 4, border: "none", background: "none", cursor: "pointer", fontSize: 14 }} title={n.pinned ? "取消置顶" : "置顶"}>{n.pinned ? "📌" : "📍"}</button>
                         <div
                           role="button"
                           tabIndex={0}
                           onClick={function() { if ((n.content || "").length > 80) setNoteExpandedId(noteExpandedId === n.id ? null : n.id); }}
                           onKeyDown={function(e) { if ((n.content || "").length > 80 && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setNoteExpandedId(noteExpandedId === n.id ? null : n.id); } }}
                           style={{
-                            fontSize: 14, color: T.text, lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: 8,
+                            fontSize: 14, color: T.text, lineHeight: 1.6, marginBottom: 8, paddingRight: 28,
                             cursor: (n.content || "").length > 80 ? "pointer" : "default",
                             userSelect: "text",
                           }}
+                          className="note-content"
                         >
-                          {noteExpandedId === n.id ? (n.content || "") : summary}
+                          {noteExpandedId === n.id ? (
+                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown>{n.content || ""}</ReactMarkdown></div>
+                          ) : (
+                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown>{summary}</ReactMarkdown></div>
+                          )}
                           {(n.content || "").length > 80 && (
                             <span style={{ fontSize: 12, color: T.accent, marginLeft: 6 }}>{noteExpandedId === n.id ? " 收起 ▴" : " 展开 ▾"}</span>
                           )}
                         </div>
+                        {(n.tags || []).length > 0 && (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                            {(n.tags || []).map(function(t) { return (
+                              <span key={t} style={{ fontSize: 10, color: T.textSec, background: T.secBadge, borderRadius: 4, padding: "1px 6px" }}>{t}</span>
+                            ); })}
+                          </div>
+                        )}
                         <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 8 }}>{fmtNoteTime(n.updatedAt || n.createdAt)}</div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
+                          <button type="button" onClick={function() { setNoteEditingId(n.id); setNoteEditContent(n.content || ""); setNoteEditTags((n.tags || []).join(", ")); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>编辑</button>
                           <button type="button" onClick={function() { removeNote(n.id); }} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: FONT, background: "transparent", color: "#DC2626" }}>删除</button>
                           <button type="button" onClick={function() { convertNoteToTask(n); }} disabled={noteConvertingId === n.id} style={{ padding: "4px 10px", border: "none", borderRadius: 6, fontSize: 11, cursor: noteConvertingId === n.id ? "default" : "pointer", fontFamily: FONT, background: "transparent", color: T.accent }}>{noteConvertingId === n.id ? "转化中…" : "AI 转为任务"}</button>
                         </div>
@@ -2186,6 +2284,28 @@ export default function TaskBrain() {
       )}
 
       {toast && <Toast key={toast.id} message={toast.message} T={T} onDone={function() { setToast(null); }} />}
+
+      {/* AI 转为任务：预览确认弹窗 */}
+      {convertPreview && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20 }} onClick={function(e) { if (e.target === e.currentTarget) setConvertPreview(null); }}>
+          <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 12, padding: 20, maxWidth: 420, width: "100%", boxShadow: "0 8px 32px rgba(0,0,0,0.2)" }} onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 12 }}>确认转为任务</div>
+            <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}><strong>标题：</strong>{convertPreview.task.text}</div>
+            {convertPreview.task.detail && <div style={{ fontSize: 12, color: T.textSec, marginBottom: 8 }}><strong>备注：</strong>{convertPreview.task.detail}</div>}
+            <div style={{ fontSize: 12, color: T.textSec, marginBottom: 16 }}>
+              {categories.find(function(c) { return c.id === convertPreview.task.category; }) && <span style={{ marginRight: 8 }}>{(categories.find(function(c) { return c.id === convertPreview.task.category; }).emoji || "📌") + " " + (categories.find(function(c) { return c.id === convertPreview.task.category; }).label || "")}</span>}
+              <span style={{ marginRight: 8 }}>{PRIORITIES.find(function(p) { return p.id === convertPreview.task.priority; })?.label || "中"}</span>
+              {convertPreview.task.type === "deadline" && convertPreview.task.deadline && <span>🗓 {fmtDateWithWeekday(convertPreview.task.deadline)}</span>}
+              {convertPreview.task.type === "week" && convertPreview.task.week && <span>📌 {getWeekLabel(convertPreview.task.week, CW)}</span>}
+              {convertPreview.task.type === "week" && !convertPreview.task.week && <span>待安排</span>}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" onClick={function() { setConvertPreview(null); }} style={{ padding: "8px 16px", border: "1px solid " + T.cardBorder, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: FONT, background: "transparent", color: T.textSec }}>取消</button>
+              <button type="button" onClick={confirmConvertTask} style={{ padding: "8px 16px", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT, background: T.accent, color: "#fff" }}>确认创建</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
