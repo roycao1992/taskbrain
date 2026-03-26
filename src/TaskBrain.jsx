@@ -1,6 +1,20 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { flushSync } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { getSupabase } from "./lib/supabase";
+
+/** 随笔 Markdown 预览：嵌套 ul/ol 缩进，避免子 bullet 与父级对齐成同一层。 */
+var NOTE_MD_COMPONENTS = {
+  ul: function(props) {
+    return <ul {...props} style={Object.assign({ marginTop: 4, marginBottom: 4, paddingLeft: "1.25em", listStylePosition: "outside" }, props.style)} />;
+  },
+  ol: function(props) {
+    return <ol {...props} style={Object.assign({ marginTop: 4, marginBottom: 4, paddingLeft: "1.25em", listStylePosition: "outside" }, props.style)} />;
+  },
+  li: function(props) {
+    return <li {...props} style={Object.assign({ marginTop: 2, marginBottom: 2 }, props.style)} />;
+  },
+};
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
 
@@ -318,6 +332,192 @@ function hasDeadlineCue(text) {
   return /(截止|截至|之前|以前|前完成|前提交|前处理|前搞定|before|due)/i.test(raw)
     || /(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}|\d{1,2}月\d{1,2}[日号]?|今天|明天|后天)/.test(raw);
 }
+
+/** 当前 caret 所在行的 [lineStart, lineEnd)（与 \\r\\n / \\r 兼容，避免 slice 错行导致「看起来有缩进但 strip 不到」）。 */
+function getLineBoundsForCaret(valueStr, caret) {
+  var pos = Math.max(0, Math.min(caret, valueStr.length));
+  var lineStart = 0;
+  var i = 0;
+  while (i < pos) {
+    var c = valueStr.charCodeAt(i);
+    if (c === 10) lineStart = i + 1;
+    else if (c === 13) {
+      if (valueStr.charCodeAt(i + 1) === 10) {
+        lineStart = i + 2;
+        i++;
+      } else lineStart = i + 1;
+    }
+    i++;
+  }
+  var lineEnd = valueStr.length;
+  var j = lineStart;
+  while (j < valueStr.length) {
+    var c2 = valueStr.charCodeAt(j);
+    if (c2 === 10 || c2 === 13) {
+      lineEnd = j;
+      break;
+    }
+    j++;
+  }
+  return { lineStart: lineStart, lineEnd: lineEnd };
+}
+
+/** 撤销一层缩进：4 个空格为一层（与 sub bullet 对齐），否则 2 个空格，否则 1 个，否则 tab。 */
+function stripOneLeadingIndent(line) {
+  if (!line.length) return null;
+  var c0 = line.charCodeAt(0);
+  var c1 = line.length > 1 ? line.charCodeAt(1) : 0;
+  var c2 = line.length > 2 ? line.charCodeAt(2) : 0;
+  var c3 = line.length > 3 ? line.charCodeAt(3) : 0;
+  if (c0 === 9) return { out: line.slice(1), take: 1 };
+  if (c0 === 32 && c1 === 32 && c2 === 32 && c3 === 32) return { out: line.slice(4), take: 4 };
+  if (c0 === 32 && c1 === 32) return { out: line.slice(2), take: 2 };
+  if (c0 === 32) return { out: line.slice(1), take: 1 };
+  if (c0 === 0x3000 && c1 === 0x3000) return { out: line.slice(2), take: 2 };
+  if (c0 === 160 && c1 === 160) return { out: line.slice(2), take: 2 };
+  if (c0 === 13) return { out: line.slice(1), take: 1 };
+  if (c0 !== 10 && c0 !== 13 && /\s/.test(line[0])) return { out: line.slice(1), take: 1 };
+  return null;
+}
+
+/**
+ * Tab 缩进规则：
+ *  - 有序列表行（N.）：转为 4 个空格 + "- "，即 CommonMark 合法的嵌套子无序列表（content starts at col 4 for "1. "）。
+ *  - 其余行：前置 2 个空格。
+ */
+function applyTabIndentToLine(line) {
+  var numMatch = line.match(/^(\s*)(\d+)\.\s*(.*)$/);
+  if (numMatch) {
+    return numMatch[1] + "    - " + (numMatch[3] != null ? numMatch[3] : "");
+  }
+  return "  " + line;
+}
+
+/** 受控 textarea：flushSync 提交 state，再同步/下一帧设选区（避免 queueMicrotask 与 React 提交顺序打架）。 */
+function applyNoteValueCaret(setValue, ta, newVal, pos) {
+  flushSync(function() {
+    setValue(function() {
+      return newVal;
+    });
+  });
+  var len = newVal.length;
+  var clamped = Math.max(0, Math.min(pos, len));
+  function applySel() {
+    if (!ta || typeof ta.setSelectionRange !== "function") return;
+    var v = ta.value;
+    var L = v != null ? String(v).length : len;
+    var p = Math.max(0, Math.min(clamped, L));
+    ta.setSelectionRange(p, p);
+  }
+  applySel();
+  requestAnimationFrame(applySel);
+}
+
+/** Shift+Tab on an indented bullet: scan backwards for the last numbered item and restore as N+1. */
+function tryRestoreAsNumberedItem(line, valueStr, lineStart) {
+  var match = line.match(/^(\s{4,})([-*])\s*(.*)$/);
+  if (!match) return null;
+  var content = match[3];
+  var textBefore = lineStart > 0 ? valueStr.slice(0, lineStart).replace(/[\r\n]+$/, "") : "";
+  var prevLines = textBefore.split("\n");
+  for (var i = prevLines.length - 1; i >= 0; i--) {
+    var pl = prevLines[i];
+    var numMatch = pl.match(/^(\s*)(\d+)\.\s/);
+    if (numMatch) {
+      return numMatch[1] + (parseInt(numMatch[2], 10) + 1) + ". " + content;
+    }
+    if (/^\s*$/.test(pl)) break;
+  }
+  return null;
+}
+
+/** 随笔正文：编号/无序列表回车续行、空行退出列表、Tab 缩进 / Shift+Tab 反缩进。已处理返回 true。 */
+function applyNoteListKeyDown(e, value, setValue) {
+  var ta = e.target;
+  if (!ta || ta.tagName !== "TEXTAREA") return false;
+  if (e.isComposing || (e.nativeEvent && e.nativeEvent.isComposing)) return false;
+  var start = ta.selectionStart;
+  var end = ta.selectionEnd;
+  if (start !== end) return false;
+
+  // 以 textarea 当前 DOM 为准，避免受控组件闭包滞后导致 Shift+Tab 读不到 Tab 后的缩进
+  var valueStr = String(ta.value != null ? ta.value : value || "");
+  var bounds = getLineBoundsForCaret(valueStr, start);
+  var lineStart = bounds.lineStart;
+  var lineEnd = bounds.lineEnd;
+  var line = valueStr.slice(lineStart, lineEnd);
+
+  var isTabKey = e.key === "Tab" || e.code === "Tab" || e.keyCode === 9 || e.which === 9;
+  if (isTabKey) {
+    if (e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      var restored = tryRestoreAsNumberedItem(line, valueStr, lineStart);
+      if (restored !== null) {
+        var newValR = valueStr.slice(0, lineStart) + restored + valueStr.slice(lineEnd);
+        applyNoteValueCaret(setValue, ta, newValR, lineStart + restored.length);
+        return true;
+      }
+      var st = stripOneLeadingIndent(line);
+      if (st) {
+        var take = st.take;
+        var out = st.out;
+        var newVal = valueStr.slice(0, lineStart) + out + valueStr.slice(lineEnd);
+        var newPos = Math.max(lineStart, start - take);
+        applyNoteValueCaret(setValue, ta, newVal, newPos);
+        return true;
+      }
+      return true;
+    }
+    e.preventDefault();
+    var indented = applyTabIndentToLine(line);
+    var newVal2 = valueStr.slice(0, lineStart) + indented + valueStr.slice(lineEnd);
+    var delta = indented.length - line.length;
+    // #region agent log
+    fetch("http://127.0.0.1:7391/ingest/9b5b78ae-c0e3-40ea-baab-7dfce6090458", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "1bd15d" }, body: JSON.stringify({ sessionId: "1bd15d", hypothesisId: "tab_indent", location: "applyNoteListKeyDown:tab", message: "tab_applied", data: { lineJson: JSON.stringify(line.slice(0, 60)), indentedJson: JSON.stringify(indented.slice(0, 60)), delta: delta, newValSnippet: JSON.stringify(newVal2.slice(Math.max(0, lineStart - 5), lineStart + indented.length + 5)) }, timestamp: Date.now(), runId: "sub-bullet" }) }).catch(function() {});
+    // #endregion
+    applyNoteValueCaret(setValue, ta, newVal2, start + delta);
+    return true;
+  }
+
+  if (e.key === "Enter" && !e.shiftKey) {
+    if (/^\s*\d+\.\s*$/.test(line) || /^\s*[-*]\s*$/.test(line)) {
+      e.preventDefault();
+      var newVal3 = valueStr.slice(0, lineStart) + valueStr.slice(lineEnd);
+      applyNoteValueCaret(setValue, ta, newVal3, lineStart);
+      return true;
+    }
+    if (start !== lineEnd) return false;
+
+    // 光标在行尾且后面已有换行 + 非空下一行时，不要用 slice(0,lineEnd)+"\nN. "+slice(lineEnd) 续号（会在 \n 前再插一行，出现两个 "2."）
+    if (lineEnd < valueStr.length && valueStr.charAt(lineEnd) === "\n") {
+      var restAfterNl = valueStr.slice(lineEnd + 1);
+      if (restAfterNl.trim() !== "") return false;
+    }
+
+    // \s* 允许 "1.a" 无空格；续行只插入 "\nN. "，不把上一行正文带到下一行
+    var numMatch = line.match(/^(\s*)(\d+)\.\s*(.*)$/);
+    if (numMatch && String(numMatch[3] || "").trim() !== "") {
+      e.preventDefault();
+      var n = parseInt(numMatch[2], 10) + 1;
+      var insert = "\n" + numMatch[1] + n + ". ";
+      var newVal4 = valueStr.slice(0, lineEnd) + insert + valueStr.slice(lineEnd);
+      applyNoteValueCaret(setValue, ta, newVal4, lineEnd + insert.length);
+      return true;
+    }
+    var bulletMatch = line.match(/^(\s*)([-*])\s*(.*)$/);
+    if (bulletMatch && String(bulletMatch[3] || "").trim() !== "") {
+      e.preventDefault();
+      var insert2 = "\n" + bulletMatch[1] + bulletMatch[2] + " ";
+      var newVal5 = valueStr.slice(0, lineEnd) + insert2 + valueStr.slice(lineEnd);
+      applyNoteValueCaret(setValue, ta, newVal5, lineEnd + insert2.length);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function fmtNoteTime(ts) {
   if (!ts) return "";
   var d = new Date(ts);
@@ -2079,7 +2279,7 @@ export default function TaskBrain() {
               <button type="button" onClick={function() { setNoteNewExpanded(true); }} style={{ padding: "10px 18px", background: T.card, border: "1px dashed " + T.cardBorder, borderRadius: 10, fontSize: 14, fontWeight: 600, color: T.textSec, cursor: "pointer", fontFamily: FONT, width: "100%", textAlign: "left" }}>📝 写随笔</button>
             ) : (
               <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
-                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} placeholder="随便写点什么… 支持 Markdown"
+                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteNewContent, setNoteNewContent); }} placeholder="随便写点什么… 支持 Markdown"
                   style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 8 }} />
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
@@ -2126,7 +2326,7 @@ export default function TaskBrain() {
                   <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, position: "relative" }}>
                     {isEditing ? (
                       <div>
-                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
+                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteEditContent, setNoteEditContent); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
                           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
@@ -2175,9 +2375,9 @@ export default function TaskBrain() {
                           className="note-content"
                         >
                           {noteExpandedId === n.id ? (
-                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown>{n.content || ""}</ReactMarkdown></div>
+                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown components={NOTE_MD_COMPONENTS}>{n.content || ""}</ReactMarkdown></div>
                           ) : (
-                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown>{summary}</ReactMarkdown></div>
+                            <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown components={NOTE_MD_COMPONENTS}>{summary}</ReactMarkdown></div>
                           )}
                           {(n.content || "").length > 80 && (
                             <span style={{ fontSize: 12, color: T.accent, marginLeft: 6 }}>{noteExpandedId === n.id ? " 收起 ▴" : " 展开 ▾"}</span>
