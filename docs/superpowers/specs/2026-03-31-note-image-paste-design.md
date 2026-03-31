@@ -82,7 +82,7 @@ img: function(props) {
 </div>
 ```
 
-**base64 图片的 detail 显示处理：** 任务卡片不做摘要截断，但 base64 长字符串直接渲染影响性能，在渲染前用同样的正则将 `![...](data:...)` 替换为 `[图片]` 再判断 `detail` 是否有内容（不影响真正的渲染，仅用于"是否显示 detail 区域"的 `.trim()` 判断）。实际渲染仍使用原始 `task.detail`，ReactMarkdown 会正确处理图片。
+**base64 图片的 detail 显示处理：** 任务卡片不做摘要截断，`(task.detail || "").trim()` 的有内容判断对 base64 内容同样有效（非空即显示），无需额外正则处理。ReactMarkdown 会正确渲染图片语法。
 
 ### 6. 摘要与展开逻辑修复（随笔）
 
@@ -152,5 +152,5 @@ var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" :
 **任务 detail：**
 - 任务编辑面板 detail textarea 可粘贴图片
 - 保存后任务卡片以 Markdown 渲染 detail（含图片）
-- 纯文本 detail 的现有任务渲染行为不变
+- 纯文本 detail（不含 Markdown 特殊字符如 `*`、`_`、`#` 等）的现有任务渲染行为不变；含特殊字符的 detail 将按 Markdown 解析（此为预期行为，与随笔一致）
 - 保存后刷新，任务 detail 图片仍然显示
