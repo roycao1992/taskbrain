@@ -48,7 +48,7 @@ function compressImageToBase64(file, maxW, quality) {
  * textarea onPaste 处理器：拦截剪切板中的图片，压缩后插入 Markdown 图片语法。
  * 文本粘贴不受影响。
  */
-function handleNoteImagePaste(e, setValue) {
+function handleNoteImagePaste(e, setValue, onError) {
   var items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
   var imageItem = null;
@@ -72,6 +72,7 @@ function handleNoteImagePaste(e, setValue) {
     applyNoteValueCaret(setValue, ta, newVal, before.length + insertion.length);
   }).catch(function(err) {
     console.error("[TaskBrain] image paste failed:", err);
+    if (onError) onError("图片粘贴失败，请重试");
   });
 }
 
@@ -1161,7 +1162,7 @@ function TaskItem(props) {
             <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>任务标题</div>
             <input type="text" value={eText} onChange={function(e) { setEText(e.target.value); }} style={{ width: "100%", padding: "8px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: FONT, outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
             <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>备注细节（可选）</div>
-            <textarea value={eDetail} onChange={function(e) { setEDetail(e.target.value); }} onPaste={function(e) { handleNoteImagePaste(e, setEDetail); }} placeholder="时间、地点、规格等补充信息" rows={2} style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.4, boxSizing: "border-box" }} />
+            <textarea value={eDetail} onChange={function(e) { setEDetail(e.target.value); }} onPaste={function(e) { handleNoteImagePaste(e, setEDetail, showToast); }} placeholder="时间、地点、规格等补充信息" rows={2} style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.4, boxSizing: "border-box" }} />
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <SelectBox value={eCat} onChange={setECat} T={T}>
@@ -1979,6 +1980,8 @@ export default function TaskBrain() {
     return list.slice().sort(function(a, b) {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    }).map(function(n) {
+      return Object.assign({}, n, { displayContent: (n.content || "").replace(/!\[[^\]]*\]\(data:[^)]+\)/g, "[图片]") });
     });
   }, [notes, noteSearch, noteTagFilter, noteTimeFilter, CW]);
 
@@ -2359,7 +2362,7 @@ export default function TaskBrain() {
               <button type="button" onClick={function() { setNoteNewExpanded(true); }} style={{ padding: "10px 18px", background: T.card, border: "1px dashed " + T.cardBorder, borderRadius: 10, fontSize: 14, fontWeight: 600, color: T.textSec, cursor: "pointer", fontFamily: FONT, width: "100%", textAlign: "left" }}>📝 写随笔</button>
             ) : (
               <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
-                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteNewContent, setNoteNewContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteNewContent); }} placeholder="随便写点什么… 支持 Markdown"
+                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteNewContent, setNoteNewContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteNewContent, showToast); }} placeholder="随便写点什么… 支持 Markdown"
                   style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 8 }} />
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
@@ -2401,13 +2404,13 @@ export default function TaskBrain() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {filteredNotes.map(function(n) {
                 var isEditing = noteEditingId === n.id;
-                var displayContent = (n.content || "").replace(/!\[[^\]]*\]\(data:[^)]+\)/g, "[图片]");
+                var displayContent = n.displayContent !== undefined ? n.displayContent : (n.content || "");
                 var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" : displayContent;
                 return (
                   <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, position: "relative" }}>
                     {isEditing ? (
                       <div>
-                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteEditContent, setNoteEditContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteEditContent); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
+                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteEditContent, setNoteEditContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteEditContent, showToast); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
                           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
