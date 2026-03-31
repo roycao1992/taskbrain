@@ -1086,8 +1086,10 @@ function TaskItem(props) {
           {(task.detail || "").trim() && (
             <div style={{
               fontSize: 11, color: T.textMuted, lineHeight: 1.4, marginTop: 3, marginBottom: 6,
-              paddingLeft: 0, fontStyle: "normal",
-            }}>{task.detail.trim()}</div>
+              paddingLeft: 0, fontStyle: "normal", whiteSpace: "pre-wrap",
+            }}>
+              <ReactMarkdown components={NOTE_MD_COMPONENTS}>{task.detail.trim()}</ReactMarkdown>
+            </div>
           )}
           {!(task.detail || "").trim() && !pending && <div style={{ marginBottom: 6 }} />}
           {pending && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 3, marginBottom: 6 }}>⏳ AI 分析中，请稍候...</div>}
