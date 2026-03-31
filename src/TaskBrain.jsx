@@ -86,6 +86,12 @@ var NOTE_MD_COMPONENTS = {
   li: function(props) {
     return <li {...props} style={Object.assign({ marginTop: 2, marginBottom: 2 }, props.style)} />;
   },
+  p: function(props) {
+    return <p {...props} style={Object.assign({ margin: 0, lineHeight: "inherit" }, props.style)} />;
+  },
+  img: function(props) {
+    return <img {...props} style={{ maxWidth: "100%", borderRadius: 6, display: "block", margin: "4px 0" }} />;
+  },
 };
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
