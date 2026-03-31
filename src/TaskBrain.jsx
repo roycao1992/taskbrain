@@ -3,6 +3,42 @@ import { flushSync } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { getSupabase } from "./lib/supabase";
 
+/**
+ * 将 File 对象压缩为 Base64 Data URL。
+ * PNG 保留透明通道（输出 image/png），其余格式输出 JPEG 80%。
+ * 宽度超过 maxW 时等比缩小，否则保持原尺寸。
+ */
+function compressImageToBase64(file, maxW, quality) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = function(ev) {
+      var img = new Image();
+      img.onerror = reject;
+      img.onload = function() {
+        var w = img.width;
+        var h = img.height;
+        if (w > maxW) {
+          h = Math.round(h * maxW / w);
+          w = maxW;
+        }
+        var canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        var isPng = file.type === "image/png";
+        var dataUrl = isPng
+          ? canvas.toDataURL("image/png")
+          : canvas.toDataURL("image/jpeg", quality);
+        resolve(dataUrl);
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /** 随笔 Markdown 预览：嵌套 ul/ol 缩进，避免子 bullet 与父级对齐成同一层。 */
 var NOTE_MD_COMPONENTS = {
   ul: function(props) {
