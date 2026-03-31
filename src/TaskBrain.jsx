@@ -44,6 +44,37 @@ function compressImageToBase64(file, maxW, quality) {
   });
 }
 
+/**
+ * textarea onPaste 处理器：拦截剪切板中的图片，压缩后插入 Markdown 图片语法。
+ * 文本粘贴不受影响。
+ */
+function handleNoteImagePaste(e, setValue) {
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  var imageItem = null;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].type.startsWith("image/")) { imageItem = items[i]; break; }
+  }
+  if (!imageItem) return;
+
+  var file = imageItem.getAsFile();
+  if (!file) return;  // getAsFile 失败时不拦截原生粘贴
+
+  e.preventDefault();
+  // 同步捕获光标位置（await 期间 DOM 状态可能变化）
+  var ta = e.target;
+  var before = ta.value.slice(0, ta.selectionStart);
+  var after = ta.value.slice(ta.selectionEnd);
+
+  compressImageToBase64(file, 1200, 0.8).then(function(dataUrl) {
+    var insertion = "![图片](" + dataUrl + ")\n";
+    var newVal = before + insertion + after;
+    applyNoteValueCaret(setValue, ta, newVal, before.length + insertion.length);
+  }).catch(function(err) {
+    console.error("[TaskBrain] image paste failed:", err);
+  });
+}
+
 /** 随笔 Markdown 预览：嵌套 ul/ol 缩进，避免子 bullet 与父级对齐成同一层。 */
 var NOTE_MD_COMPONENTS = {
   ul: function(props) {
