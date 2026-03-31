@@ -2357,7 +2357,7 @@ export default function TaskBrain() {
               <button type="button" onClick={function() { setNoteNewExpanded(true); }} style={{ padding: "10px 18px", background: T.card, border: "1px dashed " + T.cardBorder, borderRadius: 10, fontSize: 14, fontWeight: 600, color: T.textSec, cursor: "pointer", fontFamily: FONT, width: "100%", textAlign: "left" }}>📝 写随笔</button>
             ) : (
               <div style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14 }}>
-                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteNewContent, setNoteNewContent); }} placeholder="随便写点什么… 支持 Markdown"
+                <textarea value={noteNewContent} onChange={function(e) { setNoteNewContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteNewContent, setNoteNewContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteNewContent); }} placeholder="随便写点什么… 支持 Markdown"
                   style={{ width: "100%", minHeight: 100, padding: 12, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box", marginBottom: 8 }} />
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
@@ -2404,7 +2404,7 @@ export default function TaskBrain() {
                   <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, position: "relative" }}>
                     {isEditing ? (
                       <div>
-                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteEditContent, setNoteEditContent); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
+                        <textarea value={noteEditContent} onChange={function(e) { setNoteEditContent(e.target.value); }} onKeyDownCapture={function(e) { applyNoteListKeyDown(e, noteEditContent, setNoteEditContent); }} onPaste={function(e) { handleNoteImagePaste(e, setNoteEditContent); }} style={{ width: "100%", minHeight: 80, padding: 10, background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 8, fontSize: 14, color: T.text, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.5, boxSizing: "border-box", marginBottom: 8 }} />
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>标签</div>
                           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
