@@ -59,25 +59,33 @@ TaskBrain 随笔（notes）模块支持 Markdown，任务（tasks）的 `detail`
 - 编辑随笔 textarea（`noteEditContent`）：添加 `onPaste` 属性
 - 任务编辑 detail textarea（`eDetail`，`setEDetail`）：添加 `onPaste` 属性
 
-### 4. `NOTE_MD_COMPONENTS` 新增 `img`
+### 4. `NOTE_MD_COMPONENTS` 新增 `img` 和 `p`
 
+新增 `img`：
 ```js
 img: function(props) {
   return <img {...props} style={{ maxWidth: "100%", borderRadius: 6, display: "block", margin: "4px 0" }} />;
 },
 ```
 
-此组件同时用于随笔和任务 detail 的 Markdown 渲染，确保图片在卡片内自适应宽度，不撑破布局。
+新增 `p`（消除 ReactMarkdown 默认段落 margin，保持与原纯文本 `<div>` 一致的紧凑布局）：
+```js
+p: function(props) {
+  return <p {...props} style={{ margin: 0, lineHeight: "inherit" }} />;
+},
+```
 
-### 5. 任务 `detail` 渲染升级为 Markdown
+两个组件同时用于随笔和任务 detail 的 Markdown 渲染。
+
+### 5（原）任务 `detail` 渲染升级为 Markdown
 
 **任务卡片视图（只读）：** 将 `task.detail` 的渲染从：
 ```js
 <div style={{ fontSize: 11, ... }}>{task.detail.trim()}</div>
 ```
-改为：
+改为（在外层 div 加 `whiteSpace: "pre-wrap"` 保持换行行为，与随笔一致）：
 ```js
-<div style={{ fontSize: 11, ... }}>
+<div style={{ fontSize: 11, ..., whiteSpace: "pre-wrap" }}>
   <ReactMarkdown components={NOTE_MD_COMPONENTS}>{task.detail.trim()}</ReactMarkdown>
 </div>
 ```
