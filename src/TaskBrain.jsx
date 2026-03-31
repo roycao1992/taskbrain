@@ -2459,7 +2459,7 @@ export default function TaskBrain() {
                           }}
                           className="note-content"
                         >
-                          {noteExpandedId === n.id ? (
+                          {noteExpandedId === n.id || displayContent.length <= 80 ? (
                             <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown components={NOTE_MD_COMPONENTS}>{n.content || ""}</ReactMarkdown></div>
                           ) : (
                             <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown components={NOTE_MD_COMPONENTS}>{summary}</ReactMarkdown></div>
