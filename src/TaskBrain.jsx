@@ -1159,7 +1159,7 @@ function TaskItem(props) {
             <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>任务标题</div>
             <input type="text" value={eText} onChange={function(e) { setEText(e.target.value); }} style={{ width: "100%", padding: "8px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: FONT, outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
             <div style={{ fontSize: 11, color: T.textSec, marginBottom: 4 }}>备注细节（可选）</div>
-            <textarea value={eDetail} onChange={function(e) { setEDetail(e.target.value); }} placeholder="时间、地点、规格等补充信息" rows={2} style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.4, boxSizing: "border-box" }} />
+            <textarea value={eDetail} onChange={function(e) { setEDetail(e.target.value); }} onPaste={function(e) { handleNoteImagePaste(e, setEDetail); }} placeholder="时间、地点、规格等补充信息" rows={2} style={{ width: "100%", padding: "6px 10px", background: T.inputBg, border: "1px solid " + T.inputBorder, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: FONT, outline: "none", resize: "vertical", lineHeight: 1.4, boxSizing: "border-box" }} />
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <SelectBox value={eCat} onChange={setECat} T={T}>
