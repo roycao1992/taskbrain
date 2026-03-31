@@ -16,22 +16,27 @@ function compressImageToBase64(file, maxW, quality) {
       var img = new Image();
       img.onerror = reject;
       img.onload = function() {
-        var w = img.width;
-        var h = img.height;
-        if (w > maxW) {
-          h = Math.round(h * maxW / w);
-          w = maxW;
+        try {
+          var w = img.width;
+          var h = img.height;
+          if (w > maxW) {
+            h = Math.round(h * maxW / w);
+            w = maxW;
+          }
+          var canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext("2d");
+          if (!ctx) { reject(new Error("canvas 2d context unavailable")); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          var isPng = file.type === "image/png";
+          var dataUrl = isPng
+            ? canvas.toDataURL("image/png")
+            : canvas.toDataURL("image/jpeg", quality);
+          resolve(dataUrl);
+        } catch (e) {
+          reject(e);
         }
-        var canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        var ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, w, h);
-        var isPng = file.type === "image/png";
-        var dataUrl = isPng
-          ? canvas.toDataURL("image/png")
-          : canvas.toDataURL("image/jpeg", quality);
-        resolve(dataUrl);
       };
       img.src = ev.target.result;
     };
