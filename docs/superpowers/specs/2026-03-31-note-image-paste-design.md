@@ -1,4 +1,4 @@
-# 随笔图片粘贴功能设计文档
+# 随笔与任务图片粘贴功能设计文档
 
 **日期：** 2026-03-31  
 **状态：** 已批准  
@@ -8,13 +8,17 @@
 
 ## 背景
 
-TaskBrain 随笔模块支持 Markdown 格式，使用 `ReactMarkdown` 渲染。目前不支持在随笔中嵌入图片。用户希望能直接复制粘贴图片（截图、剪切板图片等）到随笔文本框，图片自动嵌入并在预览时显示。
+TaskBrain 随笔（notes）模块支持 Markdown，任务（tasks）的 `detail` 备注字段目前为纯文本。用户希望在随笔和任务 detail 中都能直接复制粘贴图片（截图、剪切板图片等），图片自动嵌入并在预览时显示。顺势将任务 `detail` 字段升级为 Markdown，与随笔保持一致体验。
 
 ---
 
 ## 存储方案
 
-图片以 **Base64 Data URL** 形式嵌入 Markdown 内容（`![图片](data:image/jpeg;base64,...)`），随笔内容整体存储在 Supabase `user_data.notes` JSON 字段中。无需额外的 Storage bucket 或后端改动。
+图片以 **Base64 Data URL** 形式嵌入 Markdown 内容（`![图片](data:image/jpeg;base64,...)`）：
+- 随笔：存储在 Supabase `user_data.notes` JSON 字段
+- 任务 detail：存储在 Supabase `user_data.tasks` JSON 字段的 `detail` 属性
+
+无需额外的 Storage bucket 或后端改动。
 
 **压缩策略：** 粘贴时用 Canvas 等比缩放至最大宽 1200px，JPEG 质量 80%，大幅减少 base64 体积。
 
@@ -53,6 +57,7 @@ TaskBrain 随笔模块支持 Markdown 格式，使用 `ReactMarkdown` 渲染。�
 
 - 新建随笔 textarea（`noteNewContent`）：添加 `onPaste` 属性
 - 编辑随笔 textarea（`noteEditContent`）：添加 `onPaste` 属性
+- 任务编辑 detail textarea（`eDetail`，`setEDetail`）：添加 `onPaste` 属性
 
 ### 4. `NOTE_MD_COMPONENTS` 新增 `img`
 
@@ -62,9 +67,24 @@ img: function(props) {
 },
 ```
 
-确保 base64 图片在预览卡片内自适应宽度，不撑破布局。
+此组件同时用于随笔和任务 detail 的 Markdown 渲染，确保图片在卡片内自适应宽度，不撑破布局。
 
-### 5. 摘要与展开逻辑修复
+### 5. 任务 `detail` 渲染升级为 Markdown
+
+**任务卡片视图（只读）：** 将 `task.detail` 的渲染从：
+```js
+<div style={{ fontSize: 11, ... }}>{task.detail.trim()}</div>
+```
+改为：
+```js
+<div style={{ fontSize: 11, ... }}>
+  <ReactMarkdown components={NOTE_MD_COMPONENTS}>{task.detail.trim()}</ReactMarkdown>
+</div>
+```
+
+**base64 图片的 detail 显示处理：** 任务卡片不做摘要截断，但 base64 长字符串直接渲染影响性能，在渲染前用同样的正则将 `![...](data:...)` 替换为 `[图片]` 再判断 `detail` 是否有内容（不影响真正的渲染，仅用于"是否显示 detail 区域"的 `.trim()` 判断）。实际渲染仍使用原始 `task.detail`，ReactMarkdown 会正确处理图片。
+
+### 6. 摘要与展开逻辑修复（随笔）
 
 当前逻辑用 `content.length > 80` 既控制摘要截断，也控制展开/收起 UI（点击行为、鼠标指针样式、展开按钮显示）。含 base64 图片的 note 原始长度达数万字符，会导致所有判断误触。
 
@@ -85,6 +105,7 @@ var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" :
 
 ## 数据流
 
+**随笔：**
 ```
 用户 Cmd+V（含图片）
   → onPaste 拦截
@@ -93,6 +114,17 @@ var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" :
   → setNoteNewContent / setNoteEditContent 更新 state
   → ReactMarkdown + NOTE_MD_COMPONENTS.img 渲染显示
   → 防抖保存 → Supabase user_data.notes 字段更新
+```
+
+**任务 detail：**
+```
+用户 Cmd+V（含图片）（在任务编辑面板的 detail textarea 中）
+  → onPaste 拦截
+  → compressImageToBase64 压缩
+  → 插入 Markdown 图片语法到 eDetail value
+  → setEDetail 更新 state
+  → 用户点击"保存" → ReactMarkdown + NOTE_MD_COMPONENTS.img 渲染显示
+  → 防抖保存 → Supabase user_data.tasks 字段更新
 ```
 
 ---
@@ -108,9 +140,17 @@ var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" :
 
 ## 测试要点
 
-- 粘贴截图（PNG），图片嵌入并在预览中显示
+**随笔：**
+- 粘贴截图（PNG），图片嵌入并在预览中显示，透明区域不变黑
 - 粘贴大图（> 1200px 宽），确认被压缩缩小
 - 文本粘贴不受影响
 - 含图片的随笔，摘要显示 `[图片]` 而非乱码
-- 编辑模式下粘贴图片正常工作
+- 随笔编辑模式下粘贴图片正常工作
+- 含图片的随笔展开/收起行为正常（不因 base64 长度误触发）
 - 保存后刷新，图片仍然显示（持久化验证）
+
+**任务 detail：**
+- 任务编辑面板 detail textarea 可粘贴图片
+- 保存后任务卡片以 Markdown 渲染 detail（含图片）
+- 纯文本 detail 的现有任务渲染行为不变
+- 保存后刷新，任务 detail 图片仍然显示
