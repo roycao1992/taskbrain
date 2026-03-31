@@ -2401,7 +2401,8 @@ export default function TaskBrain() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {filteredNotes.map(function(n) {
                 var isEditing = noteEditingId === n.id;
-                var summary = (n.content || "").length > 80 ? (n.content || "").slice(0, 80) + "…" : (n.content || "");
+                var displayContent = (n.content || "").replace(/!\[[^\]]*\]\(data:[^)]+\)/g, "[图片]");
+                var summary = displayContent.length > 80 ? displayContent.slice(0, 80) + "…" : displayContent;
                 return (
                   <div key={n.id} style={{ background: T.card, border: "1px solid " + T.cardBorder, borderRadius: 10, padding: 14, position: "relative" }}>
                     {isEditing ? (
@@ -2445,11 +2446,11 @@ export default function TaskBrain() {
                         <div
                           role="button"
                           tabIndex={0}
-                          onClick={function() { if ((n.content || "").length > 80) setNoteExpandedId(noteExpandedId === n.id ? null : n.id); }}
-                          onKeyDown={function(e) { if ((n.content || "").length > 80 && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setNoteExpandedId(noteExpandedId === n.id ? null : n.id); } }}
+                          onClick={function() { if (displayContent.length > 80) setNoteExpandedId(noteExpandedId === n.id ? null : n.id); }}
+                          onKeyDown={function(e) { if (displayContent.length > 80 && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setNoteExpandedId(noteExpandedId === n.id ? null : n.id); } }}
                           style={{
                             fontSize: 14, color: T.text, lineHeight: 1.6, marginBottom: 8, paddingRight: 28,
-                            cursor: (n.content || "").length > 80 ? "pointer" : "default",
+                            cursor: displayContent.length > 80 ? "pointer" : "default",
                             userSelect: "text",
                           }}
                           className="note-content"
@@ -2459,7 +2460,7 @@ export default function TaskBrain() {
                           ) : (
                             <div style={{ whiteSpace: "pre-wrap" }}><ReactMarkdown components={NOTE_MD_COMPONENTS}>{summary}</ReactMarkdown></div>
                           )}
-                          {(n.content || "").length > 80 && (
+                          {displayContent.length > 80 && (
                             <span style={{ fontSize: 12, color: T.accent, marginLeft: 6 }}>{noteExpandedId === n.id ? " 收起 ▴" : " 展开 ▾"}</span>
                           )}
                         </div>
