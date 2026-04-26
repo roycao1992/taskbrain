@@ -139,7 +139,7 @@ app.use(express.static('dist'));
 app.post('/api/ai', async (req, res) => {
   const { system, messages } = req.body;
   const body = {
-    model: 'deepseek-chat',
+    model: 'deepseek-v4-flash',
     max_tokens: 1200,
     messages: [{ role: 'system', content: system }, ...messages],
   };
@@ -164,7 +164,7 @@ app.listen(3000);
 
 - React 18
 - Vite
-- DeepSeek API (deepseek-chat)
+- DeepSeek API (deepseek-v4-flash)
 - Supabase（认证 + 云端数据）
 - localStorage 本地缓存
 

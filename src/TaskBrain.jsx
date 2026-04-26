@@ -751,7 +751,7 @@ async function callAI(sys, msgs, maxTokens) {
         "Authorization": "Bearer " + apiKey,
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: "deepseek-v4-flash",
         max_tokens: maxTokens || 1200,
         messages: messages,
       }),
